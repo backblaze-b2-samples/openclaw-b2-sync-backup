@@ -8,7 +8,9 @@ const INCLUDE_PATTERNS = [
   /^agents\/[^/]+\/sessions\/[^/]+\.jsonl$/,
   /^agents\/[^/]+\/sessions\/sessions\.json$/,
   /^agents\/[^/]+\/memory\/[^/]+\.sqlite$/,
+  /^agents\/[^/]+\/agent\//,
   /^workspace\//,
+  /^workspace-[^/]+\//,
   /^cron\//,
   /^hooks\//,
 ];

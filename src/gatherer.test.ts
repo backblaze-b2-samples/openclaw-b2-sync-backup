@@ -29,6 +29,12 @@ describe("gatherer", () => {
       expect(shouldInclude("workspace/nested/file.txt")).toBe(true);
     });
 
+    it("includes multi-agent workspace directories", () => {
+      expect(shouldInclude("workspace-research/SOUL.md")).toBe(true);
+      expect(shouldInclude("workspace-coding/MEMORY.md")).toBe(true);
+      expect(shouldInclude("workspace-default/AGENTS.md")).toBe(true);
+    });
+
     it("includes cron files", () => {
       expect(shouldInclude("cron/daily.json")).toBe(true);
     });
@@ -37,12 +43,18 @@ describe("gatherer", () => {
       expect(shouldInclude("hooks/on-start.sh")).toBe(true);
     });
 
-    it("excludes credentials", () => {
-      expect(shouldInclude("credentials/token.json")).toBe(false);
+    it("includes agent runtime state", () => {
+      expect(shouldInclude("agents/default/agent/config.json")).toBe(true);
+      expect(shouldInclude("agents/default/agent/state.json")).toBe(true);
     });
 
-    it("excludes auth profiles", () => {
+    it("excludes auth profiles but includes other agent files", () => {
       expect(shouldInclude("agents/default/agent/auth-profiles.json")).toBe(false);
+      expect(shouldInclude("agents/default/agent/search-config.json")).toBe(true);
+    });
+
+    it("excludes credentials", () => {
+      expect(shouldInclude("credentials/token.json")).toBe(false);
     });
 
     it("excludes media", () => {

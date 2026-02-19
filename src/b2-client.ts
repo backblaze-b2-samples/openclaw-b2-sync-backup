@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+const USER_AGENT = "b2ai-openclaw";
+
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
   getObject(bucket: string, key: string): Promise<Buffer>;
@@ -124,7 +126,7 @@ export async function createB2Client(
       method,
       path,
       query,
-      headers,
+      headers: { ...headers, "user-agent": USER_AGENT },
       body,
       region: resolvedRegion,
       accessKeyId: keyId,
@@ -213,7 +215,7 @@ export async function createB2Client(
 async function discoverRegion(keyId: string, applicationKey: string): Promise<string> {
   const auth = Buffer.from(`${keyId}:${applicationKey}`).toString("base64");
   const resp = await fetch("https://api.backblazeb2.com/b2api/v3/b2_authorize_account", {
-    headers: { authorization: `Basic ${auth}` },
+    headers: { authorization: `Basic ${auth}`, "user-agent": USER_AGENT },
   });
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");

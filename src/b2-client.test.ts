@@ -126,6 +126,39 @@ describe("b2-client Sig V4 signing", () => {
     }
   });
 
+  it("includes user-agent in signed headers when provided", () => {
+    const originalDate = globalThis.Date;
+    globalThis.Date = class extends originalDate {
+      constructor() {
+        super();
+        return fixedDate;
+      }
+      static now() {
+        return fixedDate.getTime();
+      }
+    } as typeof Date;
+
+    try {
+      const headers = signRequest({
+        method: "GET",
+        path: "/bucket/key",
+        headers: {
+          host: "s3.us-west-004.backblazeb2.com",
+          "user-agent": "b2ai-openclaw",
+        },
+        body: "",
+        region: "us-west-004",
+        accessKeyId: "004test",
+        secretAccessKey: "K004secret",
+      });
+
+      expect(headers["user-agent"]).toBe("b2ai-openclaw");
+      expect(headers.authorization).toContain("user-agent");
+    } finally {
+      globalThis.Date = originalDate;
+    }
+  });
+
   it("handles query parameters", () => {
     const originalDate = globalThis.Date;
     globalThis.Date = class extends originalDate {
