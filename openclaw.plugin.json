@@ -1,0 +1,30 @@
+{
+  "id": "b2-backup",
+  "name": "Backblaze B2 Backup",
+  "description": "Sync OpenClaw state to Backblaze B2",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["keyId", "applicationKey", "bucket"],
+    "properties": {
+      "keyId":          { "type": "string" },
+      "applicationKey": { "type": "string" },
+      "bucket":         { "type": "string" },
+      "region":         { "type": "string" },
+      "prefix":         { "type": "string" },
+      "schedule":       { "type": "string" },
+      "encrypt":        { "type": "boolean" },
+      "keepSnapshots":  { "type": "integer" }
+    }
+  },
+  "uiHints": {
+    "keyId":          { "label": "B2 Key ID", "sensitive": true },
+    "applicationKey": { "label": "B2 Application Key", "sensitive": true },
+    "bucket":         { "label": "Bucket Name", "placeholder": "my-openclaw-backups" },
+    "region":         { "label": "Region", "placeholder": "auto-detected", "advanced": true },
+    "prefix":         { "label": "Key Prefix", "placeholder": "openclaw-backup", "advanced": true },
+    "schedule":       { "label": "Schedule", "help": "daily, weekly, or cron expression", "advanced": true },
+    "encrypt":        { "label": "Encrypt", "help": "AES-256-GCM (on by default)", "advanced": true },
+    "keepSnapshots":  { "label": "Snapshots to Keep", "help": "Number of snapshots retained for rollback (default: 10)", "advanced": true }
+  }
+}
