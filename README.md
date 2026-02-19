@@ -2,17 +2,21 @@
 
 > Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
 
+## Why
+
+If you've used OpenClaw for more than a week, you've probably hit one of these:
+
+- **Rebuilt from scratch** after a broken config or busted channel integration, losing sessions and memory in the process
+- **Lost agent memory** after compaction fired and your agent forgot everything you taught it
+- **Accidentally deleted MEMORY.md** (or had your agent do it) with no way to get it back
+- **Wanted to move to a new machine** but couldn't figure out what to copy
+- **Worried about compromise** from a bad skill and wanted a known-good restore point
+
+This plugin fixes all of that. It snapshots your entire OpenClaw state — config, workspace, sessions, memory, cron, hooks — and stores encrypted, timestamped copies in B2. **Backup** happens automatically on schedule, before compaction, and on shutdown. **Sync** to a new machine is automatic on first start. **Rollback** is one agent command from chat. No scripts, no manual tarball management, no stopping the gateway.
+
 ## What Is OpenClaw B2 Backup?
 
-OpenClaw B2 Backup is a plugin that snapshots your entire OpenClaw state directory to Backblaze B2 on a schedule. It uses incremental SHA-256 diffing and AES-256-GCM encryption so only changed files are uploaded and everything is encrypted at rest. If something goes wrong — corrupted config, lost memory, bad compaction — you restore from a timestamped snapshot or ask your agent to roll back from chat.
-
-### Problem
-
-OpenClaw state is plain files on disk. One bad edit, a misinterpreted agent instruction, or an aggressive compaction can permanently destroy config, memory, and session history. There's no built-in undo, and manual backup scripts don't know how to safely snapshot SQLite databases mid-flight.
-
-### Solution
-
-This plugin runs inside the gateway process, uses SQLite's `.backup()` API for consistent database snapshots, and pushes incremental encrypted diffs to B2. It triggers automatically on schedule, before compaction, and on shutdown. On a new machine, it auto-restores from the latest snapshot on first start.
+OpenClaw B2 Backup is a plugin that snapshots your entire OpenClaw state directory to Backblaze B2 on a schedule. It uses incremental SHA-256 diffing and AES-256-GCM encryption so only changed files are uploaded and everything is encrypted at rest. It runs inside the gateway process, uses SQLite's `.backup()` API for consistent database snapshots, and pushes incremental encrypted diffs to B2.
 
 ### Who Should Use This
 
@@ -247,18 +251,6 @@ pnpm test
 ```
 
 56 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
-
-### Keeping in sync with the monorepo
-
-This repo mirrors `extensions/b2-backup/` in the [openclaw monorepo](https://github.com/openclaw/openclaw). A sync script keeps both copies aligned:
-
-```bash
-# Pull latest from the monorepo extension into this repo
-./scripts/sync.sh pull
-
-# Push changes from this repo back to the monorepo extension
-./scripts/sync.sh push
-```
 
 ## License
 
