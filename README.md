@@ -198,34 +198,6 @@ This repo mirrors `extensions/b2-backup/` in the [openclaw monorepo](https://git
 ./scripts/sync.sh push
 ```
 
-## Roadmap
-
-### Phase 1 (current)
-- Plugin scaffold + manifest
-- B2 client (Sig V4)
-- File gathering with include/exclude patterns (default + multi-agent workspaces)
-- SQLite `.backup()` snapshots
-- Incremental push with manifest diffing
-- Pull latest / pull by timestamp
-- Snapshot listing + auto-prune
-- Daily scheduler + `gateway_stop` hook
-
-### Phase 2
-- AES-256-GCM encryption
-- Gzip compression before upload
-- `before_compaction` trigger (snapshot memory before compaction rewrites transcripts)
-- `agent_end` trigger with debounce (capture state after long tasks)
-- Session store merge on pull (don't lose local-only sessions)
-- Safety snapshot before rollback (so you can undo a restore)
-- First-pull auto-restore (detect empty state + existing snapshots)
-- Agent tool for conversational rollback ("roll back to yesterday")
-
-### Phase 3
-- `openclaw doctor` integration ("last backup was 3 days ago")
-- Diagnostic events on sync failure
-- B2 Event Notifications for integrity verification
-- Docs page at docs.openclaw.ai
-
 ## License
 
 MIT
