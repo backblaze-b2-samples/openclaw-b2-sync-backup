@@ -1,20 +1,36 @@
-# OpenClaw B2 Sync Backup
+# OpenClaw B2 Backup
 
-Automatic backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
+> Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
 
-## Why
+## What Is OpenClaw B2 Backup?
 
-If you've used OpenClaw for more than a week, you've probably hit one of these:
+OpenClaw B2 Backup is a plugin that snapshots your entire OpenClaw state directory to Backblaze B2 on a schedule. It uses incremental SHA-256 diffing and AES-256-GCM encryption so only changed files are uploaded and everything is encrypted at rest. If something goes wrong — corrupted config, lost memory, bad compaction — you restore from a timestamped snapshot or ask your agent to roll back from chat.
 
-- **Rebuilt from scratch** after a broken config or busted channel integration, losing sessions and memory in the process
-- **Lost agent memory** after compaction fired and your agent forgot everything you taught it
-- **Accidentally deleted MEMORY.md** (or had your agent do it) with no way to get it back
-- **Wanted to move to a new machine** but couldn't figure out what to copy
-- **Worried about compromise** from a bad skill and wanted a known-good restore point
+### Problem
 
-This plugin fixes all of that. It snapshots your entire OpenClaw state — config, workspace, sessions, memory, cron, hooks — and stores timestamped copies in B2. Restore is one pull. No scripts, no manual tarball management, no stopping the gateway.
+OpenClaw state is plain files on disk. One bad edit, a misinterpreted agent instruction, or an aggressive compaction can permanently destroy config, memory, and session history. There's no built-in undo, and manual backup scripts don't know how to safely snapshot SQLite databases mid-flight.
 
-## Setup
+### Solution
+
+This plugin runs inside the gateway process, uses SQLite's `.backup()` API for consistent database snapshots, and pushes incremental encrypted diffs to B2. It triggers automatically on schedule, before compaction, and on shutdown. On a new machine, it auto-restores from the latest snapshot on first start.
+
+### Who Should Use This
+
+Anyone running OpenClaw who wants automatic off-machine backups without managing scripts, cron jobs, or external tools like restic/rclone.
+
+## Key Features
+
+- **Encrypted by default** — AES-256-GCM with per-file random salt/IV, key derived from your B2 application key via scrypt
+- **Incremental sync** — SHA-256 manifest diffing; only changed files are uploaded
+- **Safe SQLite snapshots** — uses `.backup()` API, no half-written databases
+- **Auto-restore on new machines** — detects empty state dir on start, pulls latest snapshot automatically
+- **Safety snapshots before rollback** — creates a restore point before any pull, stored out-of-band and never auto-pruned
+- **Compaction protection** — triggers a push before compaction fires (5-minute debounce to prevent rapid-fire)
+- **Conversational rollback** — `b2_rollback` agent tool lets you list and restore snapshots from chat
+- **Zero runtime dependencies** — hand-rolled S3 Sig V4 client, uses only `node:crypto` and OpenClaw's bundled `croner`
+- **Backward-compatible decryption** — auto-detects unencrypted data and passes through, so enabling encryption doesn't break old snapshots
+
+## Quick Start
 
 ### 1. Install
 
@@ -49,7 +65,22 @@ Add to your `openclaw.json` (or use the Control UI):
 openclaw gateway restart
 ```
 
-That's it. The plugin auto-detects your B2 region, syncs daily at midnight, and triggers a final backup when the gateway shuts down.
+That's it. Region is auto-detected, encryption is on by default, and the first backup runs at midnight.
+
+## Configuration
+
+All optional beyond the 3 required fields:
+
+| Setting | Type | Default | Required | Description |
+|---------|------|---------|----------|-------------|
+| `keyId` | string | — | Yes | B2 application key ID |
+| `applicationKey` | string | — | Yes | B2 application key (also used as encryption key source) |
+| `bucket` | string | — | Yes | B2 bucket name |
+| `region` | string | Auto-detected | No | B2 region (derived from key if omitted) |
+| `prefix` | string | `"openclaw-backup"` | No | Object key prefix in the bucket |
+| `schedule` | string | `"daily"` | No | `"daily"`, `"weekly"`, or a cron expression |
+| `encrypt` | boolean | `true` | No | AES-256-GCM encryption before upload |
+| `keepSnapshots` | number | `10` | No | Snapshots retained; oldest auto-pruned |
 
 ## What Gets Synced
 
@@ -79,7 +110,9 @@ Everything that makes your OpenClaw instance *yours*:
 
 Compaction rewrites your session transcript to save context window space. If important context lived only in the chat history and wasn't captured in MEMORY.md or the memory DB, it's gone.
 
-With this plugin, you can roll back to the snapshot taken before compaction fired and recover the full session transcript.
+With this plugin, a snapshot is automatically taken *before* compaction fires. Roll back from chat:
+
+> "Show me my B2 backup snapshots and restore the one from before compaction"
 
 ### You (or your agent) deleted MEMORY.md
 
@@ -87,7 +120,7 @@ OpenClaw memory is plain Markdown files on disk. A single misinterpreted instruc
 
 ### Config got corrupted or you broke a channel integration
 
-OpenClaw config is described by users as "really brittle." One bad edit and you're rebuilding from scratch — re-onboarding channels, re-pairing devices, re-teaching your agent. With this plugin, you restore the entire state directory from a snapshot instead.
+One bad edit and you're rebuilding from scratch — re-onboarding channels, re-pairing devices, re-teaching your agent. With this plugin, you restore the entire state directory from a snapshot instead.
 
 ### You suspect a malicious skill compromised your setup
 
@@ -99,12 +132,21 @@ Restore from a pre-compromise snapshot, rotate your secrets, and you're back to 
 openclaw plugins install @openclaw/b2-backup
 # Add the same 3 config fields to openclaw.json
 openclaw gateway restart
-# Plugin detects existing snapshots in bucket and pulls the latest
+# Plugin detects empty state + existing snapshots → auto-restores latest
 ```
 
-Your new machine has the same memory, sessions, config, and personality as the old one.
+Your new machine has the same memory, sessions, config, and personality as the old one. No manual file copying.
 
-## How Sync Works
+## How It Works
+
+### Sync Triggers
+
+| Trigger | When | Behavior |
+|---------|------|----------|
+| Cron schedule | Midnight daily (default) | Full incremental push |
+| `gateway_stop` | Gateway shutdown | Final push before exit |
+| `before_compaction` | Before session compaction | Push with 5-min debounce to prevent rapid-fire |
+| Auto-restore | Service start, empty state dir | Pull latest snapshot (no safety snapshot created) |
 
 ### Push (your machine -> B2)
 
@@ -112,37 +154,40 @@ Each sync creates a timestamped snapshot (e.g., `openclaw-backup/2026-02-19T00-0
 
 1. Walk the state directory, collect files matching include patterns
 2. Create safe SQLite snapshots via `.backup()` API (no half-written databases)
-3. Compute SHA-256 hashes, diff against last push
-4. Upload only changed/new files (incremental)
-5. Upload `manifest.json` with file list and hashes
+3. Compute SHA-256 hashes on **plaintext**, diff against last push
+4. Encrypt changed files with AES-256-GCM (if enabled)
+5. Upload changed files + unencrypted manifest
 6. Prune old snapshots beyond `keepSnapshots` limit
 
-Unlike external backup tools (Restic, rclone), this plugin runs *inside* the gateway process. It uses SQLite's `.backup()` API for consistent database snapshots and doesn't require stopping the gateway.
+Manifest hashes are always computed on plaintext so incremental diffing works regardless of encryption (random IV/salt means identical plaintext produces different ciphertext).
+
+Unlike external backup tools (Restic, rclone), this plugin runs *inside* the gateway process and doesn't require stopping the gateway.
 
 ### Pull (B2 -> your machine)
 
-Download and restore from a snapshot:
+1. Push a **safety snapshot** to `{prefix}/safety-{timestamp}/` (preserves current state before overwriting)
+2. Fetch manifest from the selected snapshot
+3. Compare local files by SHA-256 hash
+4. Download + decrypt (if encrypted) only changed/missing files
+5. Verify hashes against plaintext before writing
 
-1. Fetch the manifest from the selected snapshot
-2. Compare against local files by SHA-256 hash
-3. Download only files that differ or are missing
-4. Verify hashes before writing
+Safety snapshots are stored out-of-band and never auto-pruned, so you can always recover from a bad rollback.
 
-## Advanced Config
+## Agent Tool
 
-All optional — defaults work for most setups:
+The plugin registers a `b2_rollback` tool that lets you manage backups conversationally:
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `region` | Auto-detected | B2 region (derived from your key) |
-| `prefix` | `"openclaw-backup"` | Object key prefix in the bucket |
-| `schedule` | `"daily"` | `daily`, `weekly`, or a cron expression |
-| `encrypt` | `true` | AES-256-GCM encryption before upload (Phase 2) |
-| `keepSnapshots` | `10` | Number of snapshots retained; oldest auto-pruned |
+**List snapshots:**
+> "Show me my B2 backup snapshots"
 
-## Storage
+Returns all regular snapshots and safety snapshots with timestamps.
 
-Backblaze B2 includes [10 GB of free storage](https://www.backblaze.com/cloud-storage/pricing) — more than enough for most OpenClaw setups. Typical state is 50-500 MB, so even with 10 snapshots retained you'll comfortably stay within the free tier.
+**Restore a snapshot:**
+> "Roll back to the snapshot from February 15th"
+
+Creates a safety snapshot of current state, then restores the selected snapshot.
+
+The tool is registered as optional so it only appears when the agent needs it.
 
 ## Architecture
 
@@ -151,25 +196,40 @@ Zero external dependencies beyond what OpenClaw already ships:
 | Need | Solution |
 |------|----------|
 | S3 API calls | Hand-rolled AWS Sig V4 signing (`node:crypto`) |
+| Encryption | AES-256-GCM, scrypt key derivation from `applicationKey` |
 | Scheduling | `croner` (already in OpenClaw core) |
 | SQLite snapshots | `node:sqlite` `.backup()` API (Node 22+) |
-| File locking | `withFileLock` from plugin SDK |
+| Push debounce | Shared timer prevents rapid-fire from overlapping triggers |
 | JSON persistence | `readJsonFileWithFallback` / `writeJsonFileAtomically` from plugin SDK |
 
 ```
 src/
-  types.ts            # Config + manifest types
+  types.ts            # Config + manifest types, SAFETY_PREFIX
   b2-client.ts        # S3-compatible B2 client with Sig V4 signing
   gatherer.ts         # Walk state dir, collect syncable files
   sqlite-snapshot.ts  # Safe .backup() wrapper
   manifest.ts         # SHA-256 hashing + diff logic
-  snapshots.ts        # List, prune, select snapshots in B2
-  push.ts             # Upload changed files to B2
-  pull.ts             # Download + restore from B2
-  service.ts          # Background scheduler (croner)
-index.ts              # Plugin entry point
+  encryption.ts       # AES-256-GCM encrypt/decrypt/isEncrypted
+  debounce.ts         # Push rate limiter
+  snapshots.ts        # List, prune, filter snapshots in B2
+  push.ts             # Upload changed files to B2 (with PushOptions)
+  pull.ts             # Download + restore from B2 (with PullOptions)
+  service.ts          # Background scheduler + auto-restore
+index.ts              # Plugin entry: hooks, tool registration, debounce wiring
 openclaw.plugin.json  # Plugin manifest
 ```
+
+## Storage
+
+Backblaze B2 includes [10 GB of free storage](https://www.backblaze.com/cloud-storage/pricing) — more than enough for most OpenClaw setups. Typical state is 50-500 MB, so even with 10 encrypted snapshots retained you'll comfortably stay within the free tier.
+
+## Security
+
+- **Encryption at rest** — all file data is AES-256-GCM encrypted before leaving your machine (manifests stay unencrypted as they contain only paths and hashes)
+- **Per-file random salt/IV** — identical files produce different ciphertext
+- **Key derivation** — encryption key is derived from your `applicationKey` via scrypt (never stored separately)
+- **Credentials** and **auth profiles** are excluded from sync by design
+- Use B2 application keys scoped to a single bucket for least-privilege access
 
 ## Development
 
@@ -185,6 +245,8 @@ openclaw plugins list  # should show b2-backup
 ```bash
 pnpm test
 ```
+
+56 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
 
 ### Keeping in sync with the monorepo
 
