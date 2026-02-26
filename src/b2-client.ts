@@ -233,8 +233,13 @@ async function discoverRegion(keyId: string, applicationKey: string): Promise<st
     const text = await resp.text().catch(() => "");
     throw new Error(`b2 authorize failed (${resp.status}): ${text}`);
   }
-  const data = (await resp.json()) as { s3ApiUrl?: string };
-  const match = data.s3ApiUrl?.match(/s3\.([^.]+)\.backblazeb2\.com/);
+  const data = (await resp.json()) as {
+    s3ApiUrl?: string;
+    apiInfo?: { storageApi?: { s3ApiUrl?: string } };
+  };
+  // v3 nests s3ApiUrl under apiInfo.storageApi; v2 has it at top level
+  const s3ApiUrl = data.apiInfo?.storageApi?.s3ApiUrl ?? data.s3ApiUrl;
+  const match = s3ApiUrl?.match(/s3\.([^.]+)\.backblazeb2\.com/);
   if (!match?.[1]) {
     throw new Error("b2: could not determine region from authorize response");
   }
