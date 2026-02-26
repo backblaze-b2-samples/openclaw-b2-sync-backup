@@ -249,7 +249,7 @@ openclaw plugins list  # should show b2-backup
 pnpm test
 ```
 
-56 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
+66 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
 
 ## License
 

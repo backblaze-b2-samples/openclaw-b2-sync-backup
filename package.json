@@ -23,6 +23,9 @@
     "sync-from-monorepo": "./scripts/sync.sh pull",
     "sync-to-monorepo": "./scripts/sync.sh push"
   },
+  "dependencies": {
+    "croner": "^10.0.0"
+  },
   "peerDependencies": {
     "openclaw": ">=2026.0.0"
   },

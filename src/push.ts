@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk";
 import type { B2Client } from "./b2-client.js";
+import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
 import { pruneSnapshots } from "./snapshots.js";
@@ -15,14 +16,23 @@ type PushLogger = {
   debug?: (msg: string) => void;
 };
 
+export type PushOptions = {
+  /** Override the prefix (used for safety snapshots). */
+  prefixOverride?: string;
+  /** Skip pruning (safety snapshots are never auto-pruned). */
+  skipPrune?: boolean;
+};
+
 export async function push(
   config: B2BackupConfig,
   stateDir: string,
   b2: B2Client,
   logger: PushLogger,
+  options?: PushOptions,
 ): Promise<void> {
-  const prefix = config.prefix ?? "openclaw-backup";
+  const prefix = options?.prefixOverride ?? config.prefix ?? "openclaw-backup";
   const keepSnapshots = config.keepSnapshots ?? 10;
+  const shouldEncrypt = config.encrypt !== false; // default true
   const manifestCachePath = path.join(stateDir, ".b2-backup-manifest.json");
 
   // 1. Gather files
@@ -41,15 +51,16 @@ export async function push(
     sqliteFile.absolutePath = dest;
   }
 
-  // 3. Compute manifest
+  // 3. Compute manifest (always on plaintext)
   const manifest = await computeManifest(files);
   const timestamp = manifest.timestamp.replace(/:/g, "-").replace(/\.\d+Z$/, "Z");
 
-  // 4. Load previous manifest
-  const { value: prevManifest } = await readJsonFileWithFallback<BackupManifest | null>(
-    manifestCachePath,
-    null,
-  );
+  // 4. Load previous manifest (skip for safety snapshots)
+  let prevManifest: BackupManifest | null = null;
+  if (!options?.prefixOverride) {
+    const result = await readJsonFileWithFallback<BackupManifest | null>(manifestCachePath, null);
+    prevManifest = result.value;
+  }
 
   // 5. Diff
   const diff = diffManifests(prevManifest, manifest);
@@ -57,6 +68,7 @@ export async function push(
 
   if (toUpload.length === 0 && diff.deleted.length === 0) {
     logger.info("b2-backup: no changes since last push");
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     return;
   }
 
@@ -68,13 +80,16 @@ export async function push(
   for (const relativePath of toUpload) {
     const file = files.find((f) => f.relativePath === relativePath);
     if (!file) continue;
-    const body = await fs.promises.readFile(file.absolutePath);
+    let body = await fs.promises.readFile(file.absolutePath);
+    if (shouldEncrypt) {
+      body = encrypt(body, config.applicationKey);
+    }
     const key = `${prefix}/${timestamp}/${relativePath}`;
     await b2.putObject(config.bucket, key, body, "application/octet-stream");
     logger.debug?.(`b2-backup: uploaded ${relativePath}`);
   }
 
-  // 7. Upload manifest
+  // 7. Upload manifest (always unencrypted)
   const manifestKey = `${prefix}/${timestamp}/manifest.json`;
   await b2.putObject(
     config.bucket,
@@ -83,13 +98,17 @@ export async function push(
     "application/json",
   );
 
-  // 8. Save manifest locally
-  await writeJsonFileAtomically(manifestCachePath, manifest);
+  // 8. Save manifest locally (skip for safety snapshots)
+  if (!options?.prefixOverride) {
+    await writeJsonFileAtomically(manifestCachePath, manifest);
+  }
 
-  // 9. Prune old snapshots
-  const pruned = await pruneSnapshots(b2, config.bucket, prefix, keepSnapshots);
-  if (pruned.length > 0) {
-    logger.info(`b2-backup: pruned ${pruned.length} old snapshots`);
+  // 9. Prune old snapshots (skip for safety snapshots)
+  if (!options?.skipPrune) {
+    const pruned = await pruneSnapshots(b2, config.bucket, prefix, keepSnapshots);
+    if (pruned.length > 0) {
+      logger.info(`b2-backup: pruned ${pruned.length} old snapshots`);
+    }
   }
 
   // 10. Cleanup temp dir

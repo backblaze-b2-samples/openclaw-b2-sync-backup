@@ -20,3 +20,5 @@ export type GatheredFile = {
   absolutePath: string;
   size: number;
 };
+
+export const SAFETY_PREFIX = "safety";

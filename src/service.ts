@@ -1,7 +1,11 @@
+import fs from "node:fs";
 import { Cron } from "croner";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { createB2Client } from "./b2-client.js";
+import { gatherFiles } from "./gatherer.js";
+import { pullLatest } from "./pull.js";
 import { push } from "./push.js";
+import { getLatestSnapshot } from "./snapshots.js";
 import type { B2BackupConfig } from "./types.js";
 
 function resolveSchedule(schedule: string | undefined): string {
@@ -31,6 +35,21 @@ export function createB2BackupService(config: B2BackupConfig): OpenClawPluginSer
       } catch (err) {
         ctx.logger.error(`b2-backup: cannot access bucket "${config.bucket}": ${String(err)}`);
         return;
+      }
+
+      // Auto-restore: if state dir is empty and B2 has snapshots, pull latest
+      try {
+        const files = await gatherFiles(ctx.stateDir);
+        if (files.length === 0) {
+          const prefix = config.prefix ?? "openclaw-backup";
+          const latest = await getLatestSnapshot(b2, config.bucket, prefix);
+          if (latest) {
+            ctx.logger.info("b2-backup: empty state dir detected, auto-restoring from B2");
+            await pullLatest(config, ctx.stateDir, b2, ctx.logger, { skipSafety: true });
+          }
+        }
+      } catch (err) {
+        ctx.logger.warn(`b2-backup: auto-restore check failed: ${String(err)}`);
       }
 
       ctx.logger.info(`b2-backup: service started (schedule: ${config.schedule ?? "daily"})`);
