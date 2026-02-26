@@ -43,21 +43,15 @@ openclaw plugins install openclaw-b2-backup
 
 ### 2. Configure
 
-The installer creates the config block automatically. Open `~/.openclaw/openclaw.json` and fill in your B2 credentials:
+Open `~/.openclaw/openclaw.json` and add a `config` block to the `openclaw-b2-backup` entry the installer created:
 
 ```json
-{
-  "plugins": {
-    "entries": {
-      "openclaw-b2-backup": {
-        "enabled": true,
-        "config": {
-          "keyId": "004a...",
-          "applicationKey": "K004...",
-          "bucket": "my-openclaw-backups"
-        }
-      }
-    }
+"openclaw-b2-backup": {
+  "enabled": true,
+  "config": {
+    "keyId": "004a...",
+    "applicationKey": "K004...",
+    "bucket": "my-openclaw-backups"
   }
 }
 ```
