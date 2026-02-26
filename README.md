@@ -236,7 +236,7 @@ Backblaze B2 includes [10 GB of free storage](https://www.backblaze.com/cloud-st
 
 ```bash
 openclaw plugins install -l ./extensions/b2-backup
-openclaw plugins list  # should show b2-backup
+openclaw plugins list  # should show openclaw-b2-backup
 ```
 
 ### Run tests
@@ -245,7 +245,7 @@ openclaw plugins list  # should show b2-backup
 pnpm test
 ```
 
-66 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
+71 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
 
 ## License
 

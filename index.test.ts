@@ -43,7 +43,7 @@ describe("b2-backup plugin", () => {
   });
 
   it("exports correct plugin metadata", () => {
-    expect(register.id).toBe("b2-backup");
+    expect(register.id).toBe("openclaw-b2-backup");
     expect(register.name).toBe("Backblaze B2 Backup");
   });
 
