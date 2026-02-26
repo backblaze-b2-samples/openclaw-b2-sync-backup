@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { _signRequest as signRequest } from "./b2-client.js";
+import { _parseListObjectsResponse as parseListObjectsResponse, _signRequest as signRequest } from "./b2-client.js";
 
 describe("b2-client Sig V4 signing", () => {
   // Use fixed time for deterministic test vectors
@@ -187,5 +187,46 @@ describe("b2-client Sig V4 signing", () => {
     } finally {
       globalThis.Date = originalDate;
     }
+  });
+});
+
+describe("parseListObjectsResponse", () => {
+  it("parses entries from XML", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents><Key>prefix/file1.txt</Key><Size>100</Size><LastModified>2026-01-01</LastModified></Contents>
+      <Contents><Key>prefix/file2.txt</Key><Size>200</Size><LastModified>2026-01-02</LastModified></Contents>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries).toHaveLength(2);
+    expect(page.entries[0]).toEqual({ key: "prefix/file1.txt", size: 100, lastModified: "2026-01-01" });
+    expect(page.nextToken).toBeUndefined();
+  });
+
+  it("returns nextToken when truncated", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>abc123</NextContinuationToken>
+      <Contents><Key>prefix/file1.txt</Key><Size>100</Size><LastModified>2026-01-01</LastModified></Contents>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries).toHaveLength(1);
+    expect(page.nextToken).toBe("abc123");
+  });
+
+  it("returns no nextToken when not truncated", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents><Key>prefix/file1.txt</Key><Size>50</Size><LastModified>2026-01-01</LastModified></Contents>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.nextToken).toBeUndefined();
+  });
+
+  it("handles empty result", () => {
+    const xml = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries).toEqual([]);
+    expect(page.nextToken).toBeUndefined();
   });
 });

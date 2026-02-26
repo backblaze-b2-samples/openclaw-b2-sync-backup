@@ -104,7 +104,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
   };
 }
 
-export { signRequest as _signRequest };
+export { signRequest as _signRequest, parseListObjectsResponse as _parseListObjectsResponse };
 
 export async function createB2Client(
   keyId: string,
@@ -163,26 +163,38 @@ export async function createB2Client(
     },
 
     async listObjects(bucket, prefix) {
-      const path = `/${bucket}`;
-      const query: Record<string, string> = {
-        "list-type": "2",
-        prefix,
-        "max-keys": "1000",
-      };
-      const headers = sign("GET", path, { host: new URL(endpoint).host }, "", query);
-      const qs = Object.entries(query)
-        .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-        .join("&");
-      const resp = await fetch(`${endpoint}${path}?${qs}`, {
-        method: "GET",
-        headers,
-      });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new Error(`b2 listObjects failed (${resp.status}): ${text}`);
-      }
-      const xml = await resp.text();
-      return parseListObjectsResponse(xml);
+      const all: B2ObjectEntry[] = [];
+      let continuationToken: string | undefined;
+
+      do {
+        const query: Record<string, string> = {
+          "list-type": "2",
+          prefix,
+          "max-keys": "1000",
+        };
+        if (continuationToken) {
+          query["continuation-token"] = continuationToken;
+        }
+        const reqPath = `/${bucket}`;
+        const headers = sign("GET", reqPath, { host: new URL(endpoint).host }, "", query);
+        const qs = Object.entries(query)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+          .join("&");
+        const resp = await fetch(`${endpoint}${reqPath}?${qs}`, {
+          method: "GET",
+          headers,
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(`b2 listObjects failed (${resp.status}): ${text}`);
+        }
+        const xml = await resp.text();
+        const page = parseListObjectsResponse(xml);
+        all.push(...page.entries);
+        continuationToken = page.nextToken;
+      } while (continuationToken);
+
+      return all;
     },
 
     async deleteObject(bucket, key) {
@@ -229,7 +241,12 @@ async function discoverRegion(keyId: string, applicationKey: string): Promise<st
   return match[1];
 }
 
-function parseListObjectsResponse(xml: string): B2ObjectEntry[] {
+type ListObjectsPage = {
+  entries: B2ObjectEntry[];
+  nextToken: string | undefined;
+};
+
+function parseListObjectsResponse(xml: string): ListObjectsPage {
   const entries: B2ObjectEntry[] = [];
   const contentRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
   let match: RegExpExecArray | null;
@@ -240,5 +257,11 @@ function parseListObjectsResponse(xml: string): B2ObjectEntry[] {
     const lastModified = block.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] ?? "";
     entries.push({ key, size, lastModified });
   }
-  return entries;
+
+  const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+  const nextToken = isTruncated
+    ? xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1]
+    : undefined;
+
+  return { entries, nextToken };
 }
