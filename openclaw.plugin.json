@@ -16,6 +16,20 @@
       "keepSnapshots":  { "type": "integer" }
     }
   },
+  "configPatch": {
+    "plugins": {
+      "entries": {
+        "openclaw-b2-backup": {
+          "enabled": true,
+          "config": {
+            "keyId": "",
+            "applicationKey": "",
+            "bucket": ""
+          }
+        }
+      }
+    }
+  },
   "uiHints": {
     "keyId":          { "label": "B2 Key ID", "sensitive": true },
     "applicationKey": { "label": "B2 Application Key", "sensitive": true },

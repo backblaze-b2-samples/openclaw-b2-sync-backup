@@ -43,13 +43,13 @@ openclaw plugins install openclaw-b2-backup
 
 ### 2. Configure
 
-Add to your `openclaw.json` (or use the Control UI):
+The installer creates the config block automatically. Open `~/.openclaw/openclaw.json` and fill in your B2 credentials:
 
 ```json
 {
   "plugins": {
     "entries": {
-      "b2-backup": {
+      "openclaw-b2-backup": {
         "enabled": true,
         "config": {
           "keyId": "004a...",
@@ -61,6 +61,8 @@ Add to your `openclaw.json` (or use the Control UI):
   }
 }
 ```
+
+You can also configure these fields in the Control UI under plugin settings.
 
 ### 3. Restart
 
@@ -133,7 +135,7 @@ Restore from a pre-compromise snapshot, rotate your secrets, and you're back to 
 
 ```bash
 openclaw plugins install openclaw-b2-backup
-# Add the same 3 config fields to openclaw.json
+# Add your B2 config (keyId, applicationKey, bucket) to the openclaw-b2-backup entry in openclaw.json
 openclaw gateway restart
 # Plugin detects empty state + existing snapshots → auto-restores latest
 ```

@@ -1,6 +1,6 @@
 {
   "name": "openclaw-b2-backup",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Sync and backup OpenClaw state to Backblaze B2",
   "type": "module",
   "main": "dist/index.mjs",
