@@ -1,6 +1,6 @@
 # OpenClaw B2 Backup
 
-> Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
+> Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage?utm_source=github&utm_medium=referral&utm_campaign=ai_artifacts&utm_content=openclaw). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
 
 ## What Is OpenClaw B2 Backup?
 
@@ -224,7 +224,7 @@ openclaw.plugin.json  # Plugin manifest
 
 ## Storage
 
-Backblaze B2 includes [10 GB of free storage](https://www.backblaze.com/cloud-storage/pricing) — more than enough for most OpenClaw setups. Typical state is 50-500 MB, so even with 10 encrypted snapshots retained you'll comfortably stay within the free tier.
+Backblaze B2 includes [10 GB of free storage](https://www.backblaze.com/cloud-storage/pricing?utm_source=github&utm_medium=referral&utm_campaign=ai_artifacts&utm_content=openclaw) — more than enough for most OpenClaw setups. Typical state is 50-500 MB, so even with 10 encrypted snapshots retained you'll comfortably stay within the free tier.
 
 ## Security
 

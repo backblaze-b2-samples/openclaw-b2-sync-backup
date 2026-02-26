@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/b2-backup",
+  "name": "openclaw-b2-backup",
   "version": "0.1.0",
   "description": "Sync and backup OpenClaw state to Backblaze B2",
   "type": "module",
