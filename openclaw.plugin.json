@@ -1,5 +1,5 @@
 {
-  "id": "b2-backup",
+  "id": "openclaw-b2-backup",
   "name": "Backblaze B2 Backup",
   "description": "Sync OpenClaw state to Backblaze B2",
   "configSchema": {

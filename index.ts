@@ -8,7 +8,7 @@ import { listSnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig } from "./src/types.js";
 
 const plugin = {
-  id: "b2-backup",
+  id: "openclaw-b2-backup",
   name: "Backblaze B2 Backup",
   description: "Sync OpenClaw state to Backblaze B2",
 
