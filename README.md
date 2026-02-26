@@ -38,7 +38,7 @@ Anyone running OpenClaw who wants automatic off-machine backups without managing
 ### 1. Install
 
 ```bash
-openclaw plugins install @openclaw/b2-backup
+openclaw plugins install openclaw-b2-backup
 ```
 
 ### 2. Configure
@@ -132,7 +132,7 @@ Restore from a pre-compromise snapshot, rotate your secrets, and you're back to 
 ### Moving to a new machine
 
 ```bash
-openclaw plugins install @openclaw/b2-backup
+openclaw plugins install openclaw-b2-backup
 # Add the same 3 config fields to openclaw.json
 openclaw gateway restart
 # Plugin detects empty state + existing snapshots → auto-restores latest
