@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { Cron } from "croner";
-import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
+import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
 import { createB2Client } from "./b2-client.js";
 import { gatherFiles } from "./gatherer.js";
 import { pullLatest } from "./pull.js";
