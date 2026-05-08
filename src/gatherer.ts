@@ -31,7 +31,26 @@ function matchesAny(relativePath: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(relativePath));
 }
 
+/**
+ * B2 rejects object keys that contain ASCII control characters (codepoints
+ * <32) with `400 InvalidRequest — File names must not contain unicode
+ * characters with codes less than 32`. We've seen this in the wild for
+ * filenames produced by upstream document/email pipelines that didn't strip
+ * trailing CR/LF from attachment names.
+ *
+ * If we sent such a file to B2 the entire push would abort. Filter those at
+ * gather time instead — they're a tiny fraction of any real workload, and the
+ * underlying issue belongs upstream.
+ */
+function hasControlChar(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    if (s.charCodeAt(i) < 32) return true;
+  }
+  return false;
+}
+
 export function shouldInclude(relativePath: string): boolean {
+  if (hasControlChar(relativePath)) return false;
   if (matchesAny(relativePath, EXCLUDE_PATTERNS)) return false;
   return matchesAny(relativePath, INCLUDE_PATTERNS);
 }
