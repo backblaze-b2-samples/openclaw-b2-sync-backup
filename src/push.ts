@@ -6,6 +6,7 @@ import type { B2Client } from "./b2-client.js";
 import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
+import { putObjectWithRetry } from "./retry.js";
 import { pruneSnapshots } from "./snapshots.js";
 import { snapshotSqlite } from "./sqlite-snapshot.js";
 import type { B2BackupConfig, BackupManifest } from "./types.js";
@@ -89,7 +90,15 @@ export async function push(
           body = encrypt(body, config.applicationKey);
         }
         const key = `${prefix}/${timestamp}/${relativePath}`;
-        await b2.putObject(config.bucket, key, body, "application/octet-stream");
+        await putObjectWithRetry(
+          b2,
+          config.bucket,
+          key,
+          body,
+          "application/octet-stream",
+          logger,
+          relativePath,
+        );
         logger.debug?.(`b2-backup: uploaded ${relativePath}`);
       }),
     );
@@ -97,11 +106,14 @@ export async function push(
 
   // 7. Upload manifest (always unencrypted)
   const manifestKey = `${prefix}/${timestamp}/manifest.json`;
-  await b2.putObject(
+  await putObjectWithRetry(
+    b2,
     config.bucket,
     manifestKey,
     Buffer.from(serializeManifest(manifest), "utf-8"),
     "application/json",
+    logger,
+    "manifest.json",
   );
 
   // 8. Save manifest locally (skip for safety snapshots)
