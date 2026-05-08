@@ -48,6 +48,33 @@ function getSignatureKey(
   return hmacSha256(kService, "aws4_request");
 }
 
+/**
+ * URI-encode one path segment per the AWS S3 SigV4 rules: encode everything
+ * `encodeURIComponent` would, plus the extra characters AWS expects encoded
+ * (`'`, `(`, `)`, `*`, `!`).
+ */
+function s3EncodeSegment(s: string): string {
+  return encodeURIComponent(s)
+    .replace(/'/g, "%27")
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29")
+    .replace(/\*/g, "%2A")
+    .replace(/!/g, "%21");
+}
+
+/**
+ * URI-encode an S3 object key for use in the canonical request and the fetch
+ * URL. Slashes between segments are preserved; everything else is encoded.
+ *
+ * The same encoded string MUST be used both for SigV4 signing and for the
+ * actual HTTP request URL. If the signed canonical path and the wire path
+ * disagree (e.g. because fetch URL-encodes spaces but the signer doesn't),
+ * B2 returns 403 AccessDenied with "Signature validation failed".
+ */
+export function s3EncodePath(p: string): string {
+  return p.split("/").map(s3EncodeSegment).join("/");
+}
+
 function signRequest(params: S3SignParams): Record<string, string> {
   const { method, path, query, headers, body, region, accessKeyId, secretAccessKey } = params;
   const service = params.service ?? "s3";
@@ -135,7 +162,7 @@ export async function createB2Client(
 
   return {
     async putObject(bucket, key, body, contentType) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("PUT", path, { host: new URL(endpoint).host, "content-type": contentType }, body);
       const resp = await fetch(`${endpoint}${path}`, {
         method: "PUT",
@@ -149,7 +176,7 @@ export async function createB2Client(
     },
 
     async getObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("GET", path, { host: new URL(endpoint).host });
       const resp = await fetch(`${endpoint}${path}`, {
         method: "GET",
@@ -198,7 +225,7 @@ export async function createB2Client(
     },
 
     async deleteObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("DELETE", path, { host: new URL(endpoint).host });
       const resp = await fetch(`${endpoint}${path}`, {
         method: "DELETE",

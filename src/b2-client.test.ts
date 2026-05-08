@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { _parseListObjectsResponse as parseListObjectsResponse, _signRequest as signRequest } from "./b2-client.js";
+import {
+  _parseListObjectsResponse as parseListObjectsResponse,
+  _signRequest as signRequest,
+  s3EncodePath,
+} from "./b2-client.js";
 
 describe("b2-client Sig V4 signing", () => {
   // Use fixed time for deterministic test vectors
@@ -187,6 +191,49 @@ describe("b2-client Sig V4 signing", () => {
     } finally {
       globalThis.Date = originalDate;
     }
+  });
+});
+
+describe("s3EncodePath", () => {
+  it("encodes spaces as %20", () => {
+    expect(s3EncodePath("my file.png")).toBe("my%20file.png");
+  });
+
+  it("preserves slashes between path segments", () => {
+    expect(s3EncodePath("workspace/foo/bar.txt")).toBe("workspace/foo/bar.txt");
+  });
+
+  it("encodes spaces but keeps slashes in mixed paths", () => {
+    expect(s3EncodePath("workspace/Marketing Image 1.png")).toBe(
+      "workspace/Marketing%20Image%201.png",
+    );
+  });
+
+  it("encodes plus signs", () => {
+    expect(s3EncodePath("a+b.txt")).toBe("a%2Bb.txt");
+  });
+
+  it("encodes the AWS-extended set: ' ( ) * !", () => {
+    expect(s3EncodePath("a'b.txt")).toBe("a%27b.txt");
+    expect(s3EncodePath("a(b).txt")).toBe("a%28b%29.txt");
+    expect(s3EncodePath("a*b.txt")).toBe("a%2Ab.txt");
+    expect(s3EncodePath("a!b.txt")).toBe("a%21b.txt");
+  });
+
+  it("preserves unreserved characters", () => {
+    expect(s3EncodePath("a-b_c.d~e/f.png")).toBe("a-b_c.d~e/f.png");
+  });
+
+  it("encodes unicode characters", () => {
+    expect(s3EncodePath("café.txt")).toBe("caf%C3%A9.txt");
+  });
+
+  it("handles empty path", () => {
+    expect(s3EncodePath("")).toBe("");
+  });
+
+  it("handles single segment", () => {
+    expect(s3EncodePath("file.txt")).toBe("file.txt");
   });
 });
 
