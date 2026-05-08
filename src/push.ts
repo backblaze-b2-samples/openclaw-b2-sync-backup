@@ -85,7 +85,22 @@ export async function push(
       batch.map(async (relativePath) => {
         const file = files.find((f) => f.relativePath === relativePath);
         if (!file) return;
-        let body = await fs.promises.readFile(file.absolutePath);
+        let body: Buffer;
+        try {
+          body = await fs.promises.readFile(file.absolutePath);
+        } catch (err) {
+          // The file vanished between the gather phase and now (typically
+          // because another subsystem rotated, deleted, or renamed it).
+          // Skip it and let the next push pick up the new state — failing
+          // the whole push would waste all progress made so far.
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+            logger.debug?.(
+              `b2-backup: skipping ${relativePath} (vanished between gather and upload)`,
+            );
+            return;
+          }
+          throw err;
+        }
         if (shouldEncrypt) {
           body = encrypt(body, config.applicationKey);
         }
