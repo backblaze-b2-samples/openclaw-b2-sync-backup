@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import type { B2Client } from "./b2-client.js";
 import { decrypt, isEncrypted } from "./encryption.js";
 import { deserializeManifest } from "./manifest.js";

@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import type { B2Client } from "./b2-client.js";
 import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
+import { putObjectWithRetry } from "./retry.js";
 import { pruneSnapshots } from "./snapshots.js";
 import { snapshotSqlite } from "./sqlite-snapshot.js";
 import type { B2BackupConfig, BackupManifest } from "./types.js";
@@ -84,12 +85,35 @@ export async function push(
       batch.map(async (relativePath) => {
         const file = files.find((f) => f.relativePath === relativePath);
         if (!file) return;
-        let body = await fs.promises.readFile(file.absolutePath);
+        let body: Buffer;
+        try {
+          body = await fs.promises.readFile(file.absolutePath);
+        } catch (err) {
+          // The file vanished between the gather phase and now (typically
+          // because another subsystem rotated, deleted, or renamed it).
+          // Skip it and let the next push pick up the new state — failing
+          // the whole push would waste all progress made so far.
+          if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+            logger.debug?.(
+              `b2-backup: skipping ${relativePath} (vanished between gather and upload)`,
+            );
+            return;
+          }
+          throw err;
+        }
         if (shouldEncrypt) {
           body = encrypt(body, config.applicationKey);
         }
         const key = `${prefix}/${timestamp}/${relativePath}`;
-        await b2.putObject(config.bucket, key, body, "application/octet-stream");
+        await putObjectWithRetry(
+          b2,
+          config.bucket,
+          key,
+          body,
+          "application/octet-stream",
+          logger,
+          relativePath,
+        );
         logger.debug?.(`b2-backup: uploaded ${relativePath}`);
       }),
     );
@@ -97,11 +121,14 @@ export async function push(
 
   // 7. Upload manifest (always unencrypted)
   const manifestKey = `${prefix}/${timestamp}/manifest.json`;
-  await b2.putObject(
+  await putObjectWithRetry(
+    b2,
     config.bucket,
     manifestKey,
     Buffer.from(serializeManifest(manifest), "utf-8"),
     "application/json",
+    logger,
+    "manifest.json",
   );
 
   // 8. Save manifest locally (skip for safety snapshots)
