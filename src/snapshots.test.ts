@@ -5,6 +5,7 @@ import {
   listRegularSnapshots,
   listSafetySnapshots,
   listSnapshots,
+  pruneSafetySnapshots,
   pruneSnapshots,
 } from "./snapshots.js";
 
@@ -256,6 +257,61 @@ describe("snapshots", () => {
         `${prefix}/safety-2026-01-02T00-00-00Z/`,
       );
       expect(b2.listObjects).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("pruneSafetySnapshots", () => {
+    it("deletes oldest safety prefixes beyond keep count", async () => {
+      const objects = [
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        {
+          key: `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+        {
+          key: `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/partial.bin`,
+          size: 10,
+          lastModified: "",
+        },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+        {
+          key: `${prefix}/safety-2026-01-03T00-00-00Z/2026-01-03T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ];
+      const b2 = createMockB2(objects);
+
+      const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 2);
+      expect(pruned).toEqual(["safety-2026-01-01T00-00-00Z"]);
+      expect(b2.deleteObject).toHaveBeenCalledTimes(2);
+      expect(b2.deleteObject).toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/file.txt`,
+      );
+      expect(b2.deleteObject).toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/partial.bin`,
+      );
+    });
+
+    it("does nothing when safety snapshots are within keep count", async () => {
+      const b2 = createMockB2([
+        {
+          key: `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+
+      const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 2);
+      expect(pruned).toEqual([]);
+      expect(b2.deleteObject).not.toHaveBeenCalled();
     });
   });
 });

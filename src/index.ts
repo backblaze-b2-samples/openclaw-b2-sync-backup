@@ -16,6 +16,7 @@ export {
   listRegularSnapshots,
   listSafetySnapshots,
   listSnapshots,
+  pruneSafetySnapshots,
   pruneSnapshots,
 } from "./snapshots.js";
 export { snapshotSqlite } from "./sqlite-snapshot.js";

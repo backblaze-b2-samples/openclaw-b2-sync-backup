@@ -47,6 +47,7 @@ async function listSnapshotDirs(
   return [...timestamps].sort();
 }
 
+/** Lists regular snapshots only, excluding safety-* prefixes. */
 export async function listRegularSnapshots(
   b2: B2Client,
   bucket: string,
@@ -56,6 +57,7 @@ export async function listRegularSnapshots(
   return snapshotDirs.filter((dir) => !isSafetySnapshotDir(dir));
 }
 
+/** Lists restorable safety snapshots as safety-{timestamp}/{snapshot-timestamp}. */
 export async function listSafetySnapshots(
   b2: B2Client,
   bucket: string,
@@ -121,6 +123,27 @@ export async function pruneSnapshots(
   const toDelete = snapshots.slice(0, snapshots.length - keep);
   for (const ts of toDelete) {
     const objects = await b2.listObjects(bucket, `${prefix}/${ts}/`);
+    for (const obj of objects) {
+      await b2.deleteObject(bucket, obj.key);
+    }
+  }
+  return toDelete;
+}
+
+/** Prunes whole safety-* prefixes separately from regular snapshot retention. */
+export async function pruneSafetySnapshots(
+  b2: B2Client,
+  bucket: string,
+  prefix: string,
+  keep: number,
+): Promise<string[]> {
+  const snapshotDirs = await listSnapshotDirs(b2, bucket, prefix);
+  const safetyDirs = snapshotDirs.filter(isSafetySnapshotDir);
+  if (safetyDirs.length <= keep) return [];
+
+  const toDelete = safetyDirs.slice(0, safetyDirs.length - keep);
+  for (const safetyDir of toDelete) {
+    const objects = await b2.listObjects(bucket, `${prefix}/${safetyDir}/`);
     for (const obj of objects) {
       await b2.deleteObject(bucket, obj.key);
     }

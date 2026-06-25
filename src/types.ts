@@ -7,6 +7,7 @@ export type B2BackupConfig = {
   schedule?: string;
   encrypt?: boolean;
   keepSnapshots?: number;
+  keepSafetySnapshots?: number;
 };
 
 export type BackupManifest = {
