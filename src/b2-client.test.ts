@@ -227,6 +227,21 @@ describe("parseListObjectsResponse", () => {
     const xml = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries).toEqual([]);
+    expect(page.prefixes).toEqual([]);
     expect(page.nextToken).toBeUndefined();
+  });
+
+  it("parses common prefixes from delimiter listings", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <CommonPrefixes><Prefix>openclaw-backup/2026-01-01T00-00-00Z/</Prefix></CommonPrefixes>
+      <CommonPrefixes><Prefix>openclaw-backup/safety-2026-01-02T00-00-00Z/</Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries).toEqual([]);
+    expect(page.prefixes).toEqual([
+      "openclaw-backup/2026-01-01T00-00-00Z/",
+      "openclaw-backup/safety-2026-01-02T00-00-00Z/",
+    ]);
   });
 });

@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { B2Client, B2ObjectEntry } from "./b2-client.js";
-import { getLatestSnapshot, listSnapshots, pruneSnapshots } from "./snapshots.js";
+import {
+  getLatestSnapshot,
+  listRegularSnapshots,
+  listSafetySnapshots,
+  listSnapshots,
+  pruneSnapshots,
+} from "./snapshots.js";
 
 function createMockB2(objects: B2ObjectEntry[]): B2Client {
   const deleted: string[] = [];
@@ -10,6 +16,18 @@ function createMockB2(objects: B2ObjectEntry[]): B2Client {
     listObjects: vi.fn(async (_bucket: string, prefix: string) =>
       objects.filter((o) => o.key.startsWith(prefix)),
     ),
+    listPrefixes: vi.fn(async (_bucket: string, requestedPrefix: string) => {
+      const prefixes = new Set<string>();
+      for (const object of objects) {
+        if (!object.key.startsWith(requestedPrefix)) continue;
+        const afterPrefix = object.key.slice(requestedPrefix.length);
+        const dir = afterPrefix.split("/")[0];
+        if (dir) {
+          prefixes.add(`${requestedPrefix}${dir}/`);
+        }
+      }
+      return [...prefixes].sort();
+    }),
     deleteObject: vi.fn(async (_bucket: string, key: string) => {
       deleted.push(key);
     }),
@@ -70,6 +88,50 @@ describe("snapshots", () => {
 
       const snapshots = await listSnapshots(b2, bucket, prefix);
       expect(snapshots).toEqual(["2026-01-01T00-00-00Z", "2026-01-03T00-00-00Z"]);
+    });
+
+    it("is a compatibility alias for regular snapshots", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+
+      const legacySnapshots = await listSnapshots(b2, bucket, prefix);
+      const regularSnapshots = await listRegularSnapshots(b2, bucket, prefix);
+      expect(legacySnapshots).toEqual(regularSnapshots);
+    });
+  });
+
+  describe("listSafetySnapshots", () => {
+    it("returns nested safety snapshot identifiers for recovery", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+        {
+          key: `${prefix}/safety-2026-01-04T00-00-00Z/2026-01-04T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+
+      const snapshots = await listSafetySnapshots(b2, bucket, prefix);
+      expect(snapshots).toEqual([
+        "safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z",
+        "safety-2026-01-04T00-00-00Z/2026-01-04T00-00-01Z",
+      ]);
+      expect(b2.listObjects).not.toHaveBeenCalled();
+      expect(b2.listPrefixes).toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/safety-2026-01-02T00-00-00Z/`,
+      );
     });
   });
 
@@ -136,6 +198,29 @@ describe("snapshots", () => {
         bucket,
         `${prefix}/2026-01-01T00-00-00Z/file.txt`,
       );
+    });
+
+    it("does not scan safety snapshot contents during regular pruning", async () => {
+      const safetyObjects = Array.from({ length: 1000 }, (_, i) => ({
+        key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file-${i}.txt`,
+        size: 10,
+        lastModified: "",
+      }));
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/2026-01-03T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        ...safetyObjects,
+      ]);
+
+      const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
+      expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
+      expect(b2.listPrefixes).toHaveBeenCalledWith(bucket, `${prefix}/`);
+      expect(b2.listObjects).not.toHaveBeenCalledWith(bucket, `${prefix}/`);
+      expect(b2.listObjects).not.toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/safety-2026-01-02T00-00-00Z/`,
+      );
+      expect(b2.listObjects).toHaveBeenCalledTimes(1);
     });
   });
 });

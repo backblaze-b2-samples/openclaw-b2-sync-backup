@@ -4,7 +4,7 @@ import { createDebounceGate } from "./src/debounce.js";
 import { pullSnapshot } from "./src/pull.js";
 import { push } from "./src/push.js";
 import { createB2BackupService } from "./src/service.js";
-import { listSnapshots } from "./src/snapshots.js";
+import { listRegularSnapshots, listSafetySnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig } from "./src/types.js";
 
 const plugin = {
@@ -71,13 +71,24 @@ const plugin = {
         const prefix = config.prefix ?? "openclaw-backup";
 
         if (params.action === "list-snapshots") {
-          const snapshots = await listSnapshots(b2, config.bucket, prefix);
-          if (snapshots.length === 0) {
+          const snapshots = await listRegularSnapshots(b2, config.bucket, prefix);
+          const safetySnapshots = await listSafetySnapshots(b2, config.bucket, prefix);
+          if (snapshots.length === 0 && safetySnapshots.length === 0) {
             return { result: "No snapshots found." };
           }
+          const sections: string[] = [];
+          if (snapshots.length > 0) {
+            sections.push(`Regular snapshots:\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`);
+          }
+          if (safetySnapshots.length > 0) {
+            sections.push(
+              `Safety snapshots:\n${safetySnapshots.map((ts) => `  - ${ts}`).join("\n")}`,
+            );
+          }
           return {
-            result: `Found ${snapshots.length} snapshot(s):\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`,
+            result: `Found ${snapshots.length + safetySnapshots.length} snapshot(s):\n${sections.join("\n")}`,
             snapshots,
+            safetySnapshots,
           };
         }
 

@@ -6,6 +6,7 @@ export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
   getObject(bucket: string, key: string): Promise<Buffer>;
   listObjects(bucket: string, prefix: string): Promise<B2ObjectEntry[]>;
+  listPrefixes(bucket: string, prefix: string): Promise<string[]>;
   deleteObject(bucket: string, key: string): Promise<void>;
   headBucket(bucket: string): Promise<void>;
 };
@@ -197,6 +198,42 @@ export async function createB2Client(
       return all;
     },
 
+    async listPrefixes(bucket, prefix) {
+      const all: string[] = [];
+      let continuationToken: string | undefined;
+
+      do {
+        const query: Record<string, string> = {
+          "list-type": "2",
+          prefix,
+          delimiter: "/",
+          "max-keys": "1000",
+        };
+        if (continuationToken) {
+          query["continuation-token"] = continuationToken;
+        }
+        const reqPath = `/${bucket}`;
+        const headers = sign("GET", reqPath, { host: new URL(endpoint).host }, "", query);
+        const qs = Object.entries(query)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+          .join("&");
+        const resp = await fetch(`${endpoint}${reqPath}?${qs}`, {
+          method: "GET",
+          headers,
+        });
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(`b2 listPrefixes failed (${resp.status}): ${text}`);
+        }
+        const xml = await resp.text();
+        const page = parseListObjectsResponse(xml);
+        all.push(...page.prefixes);
+        continuationToken = page.nextToken;
+      } while (continuationToken);
+
+      return all;
+    },
+
     async deleteObject(bucket, key) {
       const path = `/${bucket}/${key}`;
       const headers = sign("DELETE", path, { host: new URL(endpoint).host });
@@ -248,6 +285,7 @@ async function discoverRegion(keyId: string, applicationKey: string): Promise<st
 
 type ListObjectsPage = {
   entries: B2ObjectEntry[];
+  prefixes: string[];
   nextToken: string | undefined;
 };
 
@@ -263,10 +301,16 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
     entries.push({ key, size, lastModified });
   }
 
+  const prefixes: string[] = [];
+  const commonPrefixRegex = /<CommonPrefixes>\s*<Prefix>(.*?)<\/Prefix>\s*<\/CommonPrefixes>/g;
+  while ((match = commonPrefixRegex.exec(xml)) !== null) {
+    prefixes.push(match[1] ?? "");
+  }
+
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
   const nextToken = isTruncated
     ? xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1]
     : undefined;
 
-  return { entries, nextToken };
+  return { entries, prefixes, nextToken };
 }
