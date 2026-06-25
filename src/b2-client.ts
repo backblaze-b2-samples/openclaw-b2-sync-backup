@@ -310,7 +310,7 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1]?.trim() ?? "";
+    const prefix = normalizeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "");
     if (prefix) {
       prefixes.push(prefix);
     }
@@ -322,4 +322,12 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
     : undefined;
 
   return { entries, prefixes, nextToken };
+}
+
+function normalizeXmlText(text: string): string {
+  return text
+    .replace(/\r\n|\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("");
 }

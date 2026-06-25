@@ -254,7 +254,7 @@ describe("parseListObjectsResponse", () => {
       </CommonPrefixes>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
-    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-\n00-00Z/"]);
+    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-00-00Z/"]);
   });
 
   it("trims and skips empty common prefixes", () => {
