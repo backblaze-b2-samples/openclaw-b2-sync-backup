@@ -8,7 +8,24 @@ import {
   pruneSnapshots,
 } from "./snapshots.js";
 
-function createMockB2(objects: B2ObjectEntry[]): B2Client {
+type MockB2Client = B2Client & {
+  listPrefixes: ReturnType<typeof vi.fn>;
+  _deleted: string[];
+};
+
+function createLegacyMockB2(objects: B2ObjectEntry[]): B2Client {
+  return {
+    putObject: vi.fn(),
+    getObject: vi.fn(),
+    listObjects: vi.fn(async (_bucket: string, prefix: string) =>
+      objects.filter((o) => o.key.startsWith(prefix)),
+    ),
+    deleteObject: vi.fn(),
+    headBucket: vi.fn(),
+  };
+}
+
+function createMockB2(objects: B2ObjectEntry[]): MockB2Client {
   const deleted: string[] = [];
   return {
     putObject: vi.fn(),
@@ -33,7 +50,7 @@ function createMockB2(objects: B2ObjectEntry[]): B2Client {
     }),
     headBucket: vi.fn(),
     _deleted: deleted,
-  } as unknown as B2Client & { _deleted: string[] };
+  } as unknown as MockB2Client;
 }
 
 describe("snapshots", () => {
@@ -103,6 +120,24 @@ describe("snapshots", () => {
       const legacySnapshots = await listSnapshots(b2, bucket, prefix);
       const regularSnapshots = await listRegularSnapshots(b2, bucket, prefix);
       expect(legacySnapshots).toEqual(regularSnapshots);
+    });
+
+    it("supports B2 clients without prefix listing", async () => {
+      const b2 = createLegacyMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+
+      await expect(listRegularSnapshots(b2, bucket, prefix)).resolves.toEqual([
+        "2026-01-01T00-00-00Z",
+      ]);
+      await expect(listSafetySnapshots(b2, bucket, prefix)).resolves.toEqual([
+        "safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z",
+      ]);
     });
   });
 

@@ -6,9 +6,12 @@ export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
   getObject(bucket: string, key: string): Promise<Buffer>;
   listObjects(bucket: string, prefix: string): Promise<B2ObjectEntry[]>;
-  listPrefixes(bucket: string, prefix: string): Promise<string[]>;
   deleteObject(bucket: string, key: string): Promise<void>;
   headBucket(bucket: string): Promise<void>;
+};
+
+export type B2ClientWithPrefixes = B2Client & {
+  listPrefixes(bucket: string, prefix: string): Promise<string[]>;
 };
 
 export type B2ObjectEntry = {
@@ -134,7 +137,7 @@ export async function createB2Client(
       secretAccessKey: applicationKey,
     });
 
-  return {
+  const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
       const headers = sign("PUT", path, { host: new URL(endpoint).host, "content-type": contentType }, body);
@@ -259,6 +262,8 @@ export async function createB2Client(
       }
     },
   };
+
+  return client;
 }
 
 async function discoverRegion(keyId: string, applicationKey: string): Promise<string> {
@@ -305,8 +310,10 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "";
-    prefixes.push(prefix);
+    const prefix = block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1]?.trim() ?? "";
+    if (prefix) {
+      prefixes.push(prefix);
+    }
   }
 
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);

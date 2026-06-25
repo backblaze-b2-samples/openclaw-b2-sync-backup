@@ -1,5 +1,9 @@
-import type { B2Client } from "./b2-client.js";
+import type { B2Client, B2ClientWithPrefixes } from "./b2-client.js";
 import { SAFETY_PREFIX } from "./types.js";
+
+function supportsPrefixListing(b2: B2Client): b2 is B2ClientWithPrefixes {
+  return typeof (b2 as Partial<B2ClientWithPrefixes>).listPrefixes === "function";
+}
 
 function snapshotDirFromPrefix(commonPrefix: string, prefix: string): string | null {
   const rootPrefix = `${prefix}/`;
@@ -19,6 +23,19 @@ async function listSnapshotDirs(
   bucket: string,
   prefix: string,
 ): Promise<string[]> {
+  if (!supportsPrefixListing(b2)) {
+    const objects = await b2.listObjects(bucket, `${prefix}/`);
+    const timestamps = new Set<string>();
+    for (const obj of objects) {
+      const afterPrefix = obj.key.slice(prefix.length + 1);
+      const tsDir = afterPrefix.split("/")[0];
+      if (tsDir && tsDir !== "manifest.json") {
+        timestamps.add(tsDir);
+      }
+    }
+    return [...timestamps].sort();
+  }
+
   const prefixes = await b2.listPrefixes(bucket, `${prefix}/`);
   const timestamps = new Set<string>();
   for (const commonPrefix of prefixes) {
@@ -44,9 +61,23 @@ export async function listSafetySnapshots(
   bucket: string,
   prefix: string,
 ): Promise<string[]> {
-  const snapshotDirs = await listSnapshotDirs(b2, bucket, prefix);
   const safetySnapshots = new Set<string>();
 
+  if (!supportsPrefixListing(b2)) {
+    const objects = await b2.listObjects(bucket, `${prefix}/`);
+    for (const obj of objects) {
+      const afterPrefix = obj.key.slice(prefix.length + 1);
+      const parts = afterPrefix.split("/");
+      const safetyDir = parts[0];
+      const nestedDir = parts[1];
+      if (safetyDir && nestedDir && isSafetySnapshotDir(safetyDir)) {
+        safetySnapshots.add(`${safetyDir}/${nestedDir}`);
+      }
+    }
+    return [...safetySnapshots].sort();
+  }
+
+  const snapshotDirs = await listSnapshotDirs(b2, bucket, prefix);
   for (const safetyDir of snapshotDirs.filter(isSafetySnapshotDir)) {
     const nestedPrefixes = await b2.listPrefixes(bucket, `${prefix}/${safetyDir}/`);
     for (const nestedPrefix of nestedPrefixes) {
