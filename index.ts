@@ -7,6 +7,18 @@ import { createB2BackupService } from "./src/service.js";
 import { listRegularSnapshots, listSafetySnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig } from "./src/types.js";
 
+type RollbackToolParams = {
+  action: string;
+  timestamp?: string;
+};
+
+function jsonToolResult(payload: unknown) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+    details: payload,
+  };
+}
+
 const plugin = {
   id: "openclaw-b2-backup",
   name: "Backblaze B2 Backup",
@@ -50,6 +62,7 @@ const plugin = {
 
     api.registerTool({
       name: "b2_rollback",
+      label: "B2 Rollback",
       description: "List and restore B2 backup snapshots",
       parameters: {
         type: "object",
@@ -66,7 +79,7 @@ const plugin = {
         },
         required: ["action"],
       },
-      async execute(params: { action: string; timestamp?: string }) {
+      async execute(_toolCallId: string, params: RollbackToolParams) {
         const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
         const prefix = config.prefix ?? "openclaw-backup";
 
@@ -74,7 +87,7 @@ const plugin = {
           const snapshots = await listRegularSnapshots(b2, config.bucket, prefix);
           const safetySnapshots = await listSafetySnapshots(b2, config.bucket, prefix);
           if (snapshots.length === 0 && safetySnapshots.length === 0) {
-            return { result: "No snapshots found." };
+            return jsonToolResult({ result: "No snapshots found." });
           }
           const sections: string[] = [];
           if (snapshots.length > 0) {
@@ -85,22 +98,22 @@ const plugin = {
               `Safety snapshots:\n${safetySnapshots.map((ts) => `  - ${ts}`).join("\n")}`,
             );
           }
-          return {
+          return jsonToolResult({
             result: `Found ${snapshots.length + safetySnapshots.length} snapshot(s):\n${sections.join("\n")}`,
             snapshots,
             safetySnapshots,
-          };
+          });
         }
 
         if (params.action === "restore") {
           if (!params.timestamp) {
-            return { error: "timestamp is required for restore action" };
+            return jsonToolResult({ error: "timestamp is required for restore action" });
           }
           await pullSnapshot(config, stateDir, b2, api.logger, params.timestamp);
-          return { result: `Restored snapshot ${params.timestamp}` };
+          return jsonToolResult({ result: `Restored snapshot ${params.timestamp}` });
         }
 
-        return { error: `Unknown action: ${params.action}` };
+        return jsonToolResult({ error: `Unknown action: ${params.action}` });
       },
     });
   },

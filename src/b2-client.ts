@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const USER_AGENT = "b2ai-openclaw";
+const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;

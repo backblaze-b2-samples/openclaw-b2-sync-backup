@@ -144,7 +144,7 @@ describe("b2-client Sig V4 signing", () => {
         path: "/bucket/key",
         headers: {
           host: "s3.us-west-004.backblazeb2.com",
-          "user-agent": "b2ai-openclaw",
+          "user-agent": "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)",
         },
         body: "",
         region: "us-west-004",
@@ -152,7 +152,9 @@ describe("b2-client Sig V4 signing", () => {
         secretAccessKey: "K004secret",
       });
 
-      expect(headers["user-agent"]).toBe("b2ai-openclaw");
+      expect(headers["user-agent"]).toBe(
+        "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)",
+      );
       expect(headers.authorization).toContain("user-agent");
     } finally {
       globalThis.Date = originalDate;
