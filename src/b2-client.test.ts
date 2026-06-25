@@ -244,4 +244,16 @@ describe("parseListObjectsResponse", () => {
       "openclaw-backup/safety-2026-01-02T00-00-00Z/",
     ]);
   });
+
+  it("parses common prefixes whose text spans newlines", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <CommonPrefixes>
+        <Prefix>openclaw-backup/safety-2026-01-02T00-
+00-00Z/</Prefix>
+      </CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-\n00-00Z/"]);
+  });
 });

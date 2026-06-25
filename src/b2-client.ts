@@ -302,9 +302,11 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   }
 
   const prefixes: string[] = [];
-  const commonPrefixRegex = /<CommonPrefixes>\s*<Prefix>(.*?)<\/Prefix>\s*<\/CommonPrefixes>/g;
+  const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
-    prefixes.push(match[1] ?? "");
+    const block = match[1]!;
+    const prefix = block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "";
+    prefixes.push(prefix);
   }
 
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
