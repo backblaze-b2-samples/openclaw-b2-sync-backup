@@ -13,8 +13,9 @@ function readEnv(name: string): string | undefined {
   return value ? value : undefined;
 }
 
-function readConfigString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
+function readConfigString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 

@@ -88,6 +88,22 @@ describe("b2-backup plugin", () => {
     expect(api.registerService).not.toHaveBeenCalled();
   });
 
+  it("treats non-string plugin config values as missing", () => {
+    const api = createMockApi({
+      keyId: 123,
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("missing required config"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+  });
+
   it("normalizes optional string config fields", () => {
     const config = resolveB2BackupConfig({
       keyId: " test-key ",
