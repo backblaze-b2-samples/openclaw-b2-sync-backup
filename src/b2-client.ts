@@ -468,15 +468,13 @@ async function waitBeforeRetry(
   elapsedMs: number,
 ): Promise<void> {
   if (options.signal?.aborted) {
-    throw options.signal.reason instanceof Error
-      ? options.signal.reason
-      : new Error("b2 request aborted");
+    throw abortReason(options.signal);
   }
   const delayMs = retryDelayMs(options, attempt);
   options.logger?.warn?.(
     `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
   );
-  await (options.sleep ?? sleep)(delayMs);
+  await sleepWithSignal(delayMs, options.signal, options.sleep);
 }
 
 function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): number {
@@ -487,8 +485,62 @@ function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): numb
   return options.retryBaseDelayMs * 2 ** (attempt - 1) + jitter;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+async function sleepWithSignal(
+  ms: number,
+  signal: AbortSignal | undefined,
+  customSleep: ((ms: number) => Promise<void>) | undefined,
+): Promise<void> {
+  if (!signal && customSleep) {
+    await customSleep(ms);
+    return;
+  }
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+  if (!customSleep) {
+    await sleep(ms, signal);
+    return;
+  }
+
+  let onAbort!: () => void;
+  const aborted = new Promise<void>((_resolve, reject) => {
+    onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([customSleep(ms), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise((resolve, reject) => {
+    let onAbort: (() => void) | undefined;
+    const timeout = setTimeout(() => {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timeout.unref?.();
+    if (signal) {
+      onAbort = () => {
+        clearTimeout(timeout);
+        reject(abortReason(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("b2 request aborted");
 }
 
 function isRetryableStatus(status: number): boolean {
