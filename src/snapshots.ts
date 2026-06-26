@@ -1,4 +1,5 @@
 import type { B2Client } from "./b2-client.js";
+import { SAFETY_PREFIX } from "./types.js";
 
 export async function listSnapshots(
   b2: B2Client,
@@ -11,7 +12,7 @@ export async function listSnapshots(
     // Keys look like: prefix/2026-02-09T00-00-00Z/file.json
     const afterPrefix = obj.key.slice(prefix.length + 1);
     const tsDir = afterPrefix.split("/")[0];
-    if (tsDir && tsDir !== "manifest.json") {
+    if (tsDir && tsDir !== "manifest.json" && !tsDir.startsWith(`${SAFETY_PREFIX}-`)) {
       timestamps.add(tsDir);
     }
   }

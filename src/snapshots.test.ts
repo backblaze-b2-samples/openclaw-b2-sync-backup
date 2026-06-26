@@ -56,6 +56,17 @@ describe("snapshots", () => {
       expect(snapshots[0]).toBe("2026-01-01T00-00-00Z");
       expect(snapshots[2]).toBe("2026-01-03T00-00-00Z");
     });
+
+    it("excludes safety snapshots", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-03T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/safety-2026-01-04T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/safety-2026-01-04T00-00-00Z/manifest.json`, size: 10, lastModified: "" },
+      ]);
+
+      const snapshots = await listSnapshots(b2, bucket, prefix);
+      expect(snapshots).toEqual(["2026-01-03T00-00-00Z"]);
+    });
   });
 
   describe("getLatestSnapshot", () => {
@@ -73,6 +84,16 @@ describe("snapshots", () => {
       const b2 = createMockB2([]);
       const latest = await getLatestSnapshot(b2, bucket, prefix);
       expect(latest).toBeNull();
+    });
+
+    it("ignores safety snapshots when selecting latest", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-03T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/safety-2026-01-04T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ]);
+
+      const latest = await getLatestSnapshot(b2, bucket, prefix);
+      expect(latest).toBe("2026-01-03T00-00-00Z");
     });
   });
 
@@ -100,6 +121,26 @@ describe("snapshots", () => {
       const pruned = await pruneSnapshots(b2, bucket, prefix, 5);
       expect(pruned).toEqual([]);
       expect(b2.deleteObject).not.toHaveBeenCalled();
+    });
+
+    it("does not prune safety snapshots", async () => {
+      const objects = [
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/2026-01-02T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/safety-2026-01-03T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ];
+      const b2 = createMockB2(objects);
+
+      const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
+      expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
+      expect(b2.deleteObject).toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/2026-01-01T00-00-00Z/file.txt`,
+      );
+      expect(b2.deleteObject).not.toHaveBeenCalledWith(
+        bucket,
+        `${prefix}/safety-2026-01-03T00-00-00Z/file.txt`,
+      );
     });
   });
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import register from "./index.js";
+import register, { resolveB2BackupConfig } from "./index.js";
 
 function createMockApi(config: Record<string, unknown> = {}) {
   return {
@@ -86,6 +86,30 @@ describe("b2-backup plugin", () => {
       expect.stringContaining("missing required config"),
     );
     expect(api.registerService).not.toHaveBeenCalled();
+  });
+
+  it("normalizes optional string config fields", () => {
+    const config = resolveB2BackupConfig({
+      keyId: " test-key ",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      endpoint: "   ",
+      prefix: " backups ",
+      schedule: "   ",
+      encrypt: false,
+      keepSnapshots: 3,
+    });
+
+    expect(config).toEqual({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      prefix: "backups",
+      encrypt: false,
+      keepSnapshots: 3,
+    });
   });
 
   it("exports correct plugin metadata", () => {

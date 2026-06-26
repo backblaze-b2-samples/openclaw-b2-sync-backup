@@ -23,19 +23,26 @@ export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefine
   const applicationKey = readConfigString(config?.applicationKey) ?? readEnv("B2_APPLICATION_KEY");
   const bucket = readConfigString(config?.bucket) ?? readEnv("B2_BUCKET_NAME");
   const region = readConfigString(config?.region) ?? readEnv("B2_REGION");
+  const endpoint = readConfigString(config?.endpoint) ?? readEnv("B2_ENDPOINT");
+  const prefix = readConfigString(config?.prefix);
+  const schedule = readConfigString(config?.schedule);
 
   if (!keyId || !applicationKey || !bucket || !region) {
     return null;
   }
 
-  return {
-    ...config,
+  const resolved: ResolvedB2BackupConfig = {
     keyId,
     applicationKey,
     bucket,
     region,
-    endpoint: readConfigString(config?.endpoint) ?? readEnv("B2_ENDPOINT"),
   };
+  if (endpoint) resolved.endpoint = endpoint;
+  if (prefix) resolved.prefix = prefix;
+  if (schedule) resolved.schedule = schedule;
+  if (config?.encrypt !== undefined) resolved.encrypt = config.encrypt;
+  if (config?.keepSnapshots !== undefined) resolved.keepSnapshots = config.keepSnapshots;
+  return resolved;
 }
 
 function toolText(text: string, details?: unknown) {
