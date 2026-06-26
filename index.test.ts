@@ -128,6 +128,24 @@ describe("b2-backup plugin", () => {
     });
   });
 
+  it("ignores mistyped optional config fields", () => {
+    const config = resolveB2BackupConfig({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: "false",
+      keepSnapshots: "3",
+    } as any);
+
+    expect(config).toEqual({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+  });
+
   it("exports correct plugin metadata", () => {
     expect(register.id).toBe("openclaw-b2-backup");
     expect(register.name).toBe("Backblaze B2 Backup");

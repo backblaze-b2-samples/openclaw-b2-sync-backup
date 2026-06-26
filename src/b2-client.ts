@@ -307,11 +307,47 @@ function normalizeClientOptions(
     signal: merged.signal,
     random: merged.random,
     sleep: merged.sleep,
-    requestTimeoutMs: merged.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-    maxRetries: merged.maxRetries ?? DEFAULT_MAX_RETRIES,
-    retryBaseDelayMs: merged.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
-    retryJitterMs: merged.retryJitterMs ?? DEFAULT_RETRY_JITTER_MS,
+    requestTimeoutMs: positiveNumber(
+      merged.requestTimeoutMs,
+      DEFAULT_REQUEST_TIMEOUT_MS,
+      "requestTimeoutMs",
+    ),
+    maxRetries: nonNegativeInteger(merged.maxRetries, DEFAULT_MAX_RETRIES, "maxRetries"),
+    retryBaseDelayMs: nonNegativeNumber(
+      merged.retryBaseDelayMs,
+      DEFAULT_RETRY_BASE_DELAY_MS,
+      "retryBaseDelayMs",
+    ),
+    retryJitterMs: nonNegativeNumber(
+      merged.retryJitterMs,
+      DEFAULT_RETRY_JITTER_MS,
+      "retryJitterMs",
+    ),
   };
+}
+
+function positiveNumber(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error(`b2: ${name} must be a positive finite number`);
+  }
+  return resolved;
+}
+
+function nonNegativeNumber(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved < 0) {
+    throw new Error(`b2: ${name} must be a non-negative finite number`);
+  }
+  return resolved;
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0) {
+    throw new Error(`b2: ${name} must be a non-negative finite integer`);
+  }
+  return resolved;
 }
 
 function resolveRegion(region: string | undefined): string {

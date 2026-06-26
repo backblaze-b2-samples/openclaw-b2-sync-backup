@@ -247,6 +247,17 @@ describe("createB2Client", () => {
     );
   });
 
+  it.each([
+    ["requestTimeoutMs", { requestTimeoutMs: 0 }],
+    ["maxRetries", { maxRetries: -1 }],
+    ["maxRetries", { maxRetries: Number.NaN }],
+    ["retryJitterMs", { retryJitterMs: -1 }],
+  ])("rejects invalid %s option", async (name, options) => {
+    await expect(createB2Client("004test", "K004secret", "test-region", options)).rejects.toThrow(
+      `b2: ${name}`,
+    );
+  });
+
   it("adds the B2 samples user-agent to S3 requests", async () => {
     const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

@@ -41,8 +41,14 @@ export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefine
   if (endpoint) resolved.endpoint = endpoint;
   if (prefix) resolved.prefix = prefix;
   if (schedule) resolved.schedule = schedule;
-  if (config?.encrypt !== undefined) resolved.encrypt = config.encrypt;
-  if (config?.keepSnapshots !== undefined) resolved.keepSnapshots = config.keepSnapshots;
+  if (typeof config?.encrypt === "boolean") resolved.encrypt = config.encrypt;
+  if (
+    typeof config?.keepSnapshots === "number" &&
+    Number.isInteger(config.keepSnapshots) &&
+    config.keepSnapshots >= 0
+  ) {
+    resolved.keepSnapshots = config.keepSnapshots;
+  }
   return resolved;
 }
 
