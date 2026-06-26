@@ -327,6 +327,12 @@ describe("resolveEndpoint", () => {
     );
   });
 
+  it("rejects invalid endpoint URLs with a clear config error", () => {
+    expect(() => resolveEndpoint("test-region", "s3.test-region.backblazeb2.com")).toThrow(
+      "b2: endpoint must be a valid URL",
+    );
+  });
+
   it.each([
     ["http endpoint", "http://s3.test-region.backblazeb2.com"],
     ["localhost endpoint", "https://localhost"],

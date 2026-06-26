@@ -328,7 +328,12 @@ function resolveRegion(region: string | undefined): string {
 function resolveEndpoint(region: string, endpoint?: string): string {
   const expectedHost = `s3.${region}.backblazeb2.com`;
   const rawEndpoint = endpoint?.trim() || `https://${expectedHost}`;
-  const url = new URL(rawEndpoint);
+  let url: URL;
+  try {
+    url = new URL(rawEndpoint);
+  } catch {
+    throw new Error("b2: endpoint must be a valid URL");
+  }
 
   if (url.protocol !== "https:") {
     throw new Error("b2: endpoint must use https");

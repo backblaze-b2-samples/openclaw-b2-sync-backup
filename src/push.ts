@@ -56,6 +56,7 @@ export async function push(
     // 3. Compute manifest (always on plaintext)
     const manifest = await computeManifest(files);
     const snapshotId = createSnapshotId(manifest.timestamp);
+    // prefixOverride is already the full snapshot root used by safety snapshots.
     const snapshotRoot = options?.prefixOverride ?? `${prefix}/${snapshotId}`;
 
     // 4. Load previous manifest (skip for safety snapshots)
