@@ -7,7 +7,7 @@ import type { B2Client } from "./b2-client.js";
 import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
-import { pruneSnapshots } from "./snapshots.js";
+import { pruneSafetySnapshots, pruneSnapshots } from "./snapshots.js";
 import { snapshotSqlite } from "./sqlite-snapshot.js";
 import type { B2BackupConfig, BackupManifest } from "./types.js";
 
@@ -18,9 +18,9 @@ type PushLogger = {
 };
 
 export type PushOptions = {
-  /** Override the prefix (used for safety snapshots). */
+  /** Override the complete snapshot root (used for safety snapshots). */
   prefixOverride?: string;
-  /** Skip pruning (safety snapshots are never auto-pruned). */
+  /** Skip snapshot retention pruning. */
   skipPrune?: boolean;
 };
 
@@ -33,8 +33,28 @@ export async function push(
 ): Promise<void> {
   const prefix = config.prefix ?? "openclaw-backup";
   const keepSnapshots = config.keepSnapshots ?? 10;
+  const keepSafetySnapshots = config.keepSafetySnapshots ?? keepSnapshots;
   const shouldEncrypt = config.encrypt !== false; // default true
   const manifestCachePath = path.join(stateDir, ".b2-backup-manifest.json");
+
+  async function pruneRetention(): Promise<void> {
+    if (options?.skipPrune || options?.prefixOverride) return;
+
+    const pruned = await pruneSnapshots(b2, config.bucket, prefix, keepSnapshots);
+    if (pruned.length > 0) {
+      logger.info(`b2-backup: pruned ${pruned.length} old snapshots`);
+    }
+
+    const prunedSafety = await pruneSafetySnapshots(
+      b2,
+      config.bucket,
+      prefix,
+      keepSafetySnapshots,
+    );
+    if (prunedSafety.length > 0) {
+      logger.info(`b2-backup: pruned ${prunedSafety.length} old safety snapshots`);
+    }
+  }
 
   // 1. Gather files
   const files = await gatherFiles(stateDir);
@@ -72,6 +92,7 @@ export async function push(
 
     if (toUpload.length === 0 && diff.deleted.length === 0) {
       logger.info("b2-backup: no changes since last push");
+      await pruneRetention();
       return;
     }
 
@@ -110,13 +131,8 @@ export async function push(
       await writeJsonFileAtomically(manifestCachePath, manifest);
     }
 
-    // 9. Prune old snapshots (skip for safety snapshots)
-    if (!options?.skipPrune) {
-      const pruned = await pruneSnapshots(b2, config.bucket, prefix, keepSnapshots);
-      if (pruned.length > 0) {
-        logger.info(`b2-backup: pruned ${pruned.length} old snapshots`);
-      }
-    }
+    // 9. Prune old snapshots and safety snapshot prefixes.
+    await pruneRetention();
 
     logger.info(`b2-backup: push complete (snapshot ${options?.prefixOverride ?? snapshotId})`);
   } finally {

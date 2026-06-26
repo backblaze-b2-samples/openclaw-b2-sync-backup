@@ -82,6 +82,7 @@ Runtime requires the B2 key ID, application key, bucket, and region. They can co
 | `schedule` | string | `"daily"` | No | `"daily"`, `"weekly"`, or a cron expression |
 | `encrypt` | boolean | `true` | No | AES-256-GCM encryption before upload |
 | `keepSnapshots` | number | `10` | No | Snapshots retained; oldest auto-pruned |
+| `keepSafetySnapshots` | number | Same as `keepSnapshots` | No | Safety snapshots retained; oldest safety prefixes auto-pruned separately |
 
 For environment-based deployments, use the standardized names shown in `.env.example`:
 
@@ -172,7 +173,7 @@ Each sync creates a timestamped snapshot (e.g., `openclaw-backup/2026-02-19T00-0
 3. Compute SHA-256 hashes on **plaintext**, diff against last push
 4. Encrypt changed files with AES-256-GCM (if enabled)
 5. Upload changed files + unencrypted manifest
-6. Prune old snapshots beyond `keepSnapshots` limit
+6. Prune old snapshots beyond `keepSnapshots` and safety snapshots beyond `keepSafetySnapshots`
 
 Manifest hashes are always computed on plaintext so incremental diffing works regardless of encryption (random IV/salt means identical plaintext produces different ciphertext).
 
@@ -186,7 +187,7 @@ Unlike external backup tools (Restic, rclone), this plugin runs *inside* the gat
 4. Download + decrypt (if encrypted) only changed/missing files
 5. Verify hashes against plaintext before writing
 
-Safety snapshots are stored out-of-band and never auto-pruned, so you can always recover from a bad rollback.
+Safety snapshots are stored out-of-band from regular snapshots and pruned only by their own `keepSafetySnapshots` retention setting. Cleanup deletes whole `safety-*` prefixes, including failed or partial safety uploads.
 
 ## Agent Tool
 

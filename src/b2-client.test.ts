@@ -6,6 +6,8 @@ import {
   createB2Client,
 } from "./b2-client.js";
 
+const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -153,7 +155,7 @@ describe("b2-client Sig V4 signing", () => {
         path: "/bucket/key",
         headers: {
           host: "s3.test-region.backblazeb2.com",
-          "user-agent": "b2ai-openclaw (backblaze-b2-samples)",
+          "user-agent": USER_AGENT,
         },
         body: "",
         region: "test-region",
@@ -161,7 +163,7 @@ describe("b2-client Sig V4 signing", () => {
         secretAccessKey: "K004secret",
       });
 
-      expect(headers["user-agent"]).toBe("b2ai-openclaw (backblaze-b2-samples)");
+      expect(headers["user-agent"]).toBe(USER_AGENT);
       expect(headers.authorization).toContain("user-agent");
     } finally {
       globalThis.Date = originalDate;
@@ -208,7 +210,11 @@ describe("parseListObjectsResponse", () => {
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries).toHaveLength(2);
-    expect(page.entries[0]).toEqual({ key: "prefix/file1.txt", size: 100, lastModified: "2026-01-01" });
+    expect(page.entries[0]).toEqual({
+      key: "prefix/file1.txt",
+      size: 100,
+      lastModified: "2026-01-01",
+    });
     expect(page.nextToken).toBeUndefined();
   });
 
@@ -236,7 +242,34 @@ describe("parseListObjectsResponse", () => {
     const xml = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries).toEqual([]);
+    expect(page.prefixes).toEqual([]);
     expect(page.nextToken).toBeUndefined();
+  });
+
+  it("parses common prefixes from delimiter listings", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <CommonPrefixes><Prefix>openclaw-backup/2026-01-01T00-00-00Z/</Prefix></CommonPrefixes>
+      <CommonPrefixes><Prefix>openclaw-backup/safety-2026-01-02T00-00-00Z/</Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries).toEqual([]);
+    expect(page.prefixes).toEqual([
+      "openclaw-backup/2026-01-01T00-00-00Z/",
+      "openclaw-backup/safety-2026-01-02T00-00-00Z/",
+    ]);
+  });
+
+  it("parses common prefixes whose text spans newlines", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <CommonPrefixes>
+        <Prefix>openclaw-backup/safety-2026-01-02T00-
+00-00Z/</Prefix>
+      </CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-00-00Z/"]);
   });
 });
 
@@ -275,7 +308,7 @@ describe("createB2Client", () => {
       expect.objectContaining({
         method: "HEAD",
         headers: expect.objectContaining({
-          "user-agent": "b2ai-openclaw (backblaze-b2-samples)",
+          "user-agent": USER_AGENT,
         }),
       }),
     );

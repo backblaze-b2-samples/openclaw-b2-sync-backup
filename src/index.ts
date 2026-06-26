@@ -13,7 +13,14 @@ export type { PushOptions } from "./push.js";
 export { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS } from "./push-coordinator.js";
 export type { PushCoordinator, PushCoordinatorRunOptions } from "./push-coordinator.js";
 export { createB2BackupService } from "./service.js";
-export { getLatestSnapshot, listSnapshots, pruneSnapshots } from "./snapshots.js";
+export {
+  getLatestSnapshot,
+  listRegularSnapshots,
+  listSafetySnapshots,
+  listSnapshots,
+  pruneSafetySnapshots,
+  pruneSnapshots,
+} from "./snapshots.js";
 export { snapshotSqlite } from "./sqlite-snapshot.js";
 export type { B2BackupConfig, BackupManifest, GatheredFile } from "./types.js";
 export { SAFETY_PREFIX } from "./types.js";

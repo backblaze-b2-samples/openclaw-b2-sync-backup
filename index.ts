@@ -5,7 +5,7 @@ import { pullSnapshot } from "./src/pull.js";
 import { push } from "./src/push.js";
 import { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS } from "./src/push-coordinator.js";
 import { createB2BackupService } from "./src/service.js";
-import { listSnapshots } from "./src/snapshots.js";
+import { listRegularSnapshots, listSafetySnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig, ResolvedB2BackupConfig } from "./src/types.js";
 
 function readEnv(name: string): string | undefined {
@@ -19,9 +19,12 @@ function readConfigString(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): ResolvedB2BackupConfig | null {
+export function resolveB2BackupConfig(
+  config: Partial<B2BackupConfig> | undefined,
+): ResolvedB2BackupConfig | null {
   const keyId = readConfigString(config?.keyId) ?? readEnv("B2_APPLICATION_KEY_ID");
-  const applicationKey = readConfigString(config?.applicationKey) ?? readEnv("B2_APPLICATION_KEY");
+  const applicationKey =
+    readConfigString(config?.applicationKey) ?? readEnv("B2_APPLICATION_KEY");
   const bucket = readConfigString(config?.bucket) ?? readEnv("B2_BUCKET_NAME");
   const region = readConfigString(config?.region) ?? readEnv("B2_REGION");
   const endpoint = readConfigString(config?.endpoint) ?? readEnv("B2_ENDPOINT");
@@ -48,6 +51,13 @@ export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefine
     config.keepSnapshots >= 0
   ) {
     resolved.keepSnapshots = config.keepSnapshots;
+  }
+  if (
+    typeof config?.keepSafetySnapshots === "number" &&
+    Number.isInteger(config.keepSafetySnapshots) &&
+    config.keepSafetySnapshots >= 0
+  ) {
+    resolved.keepSafetySnapshots = config.keepSafetySnapshots;
   }
   return resolved;
 }
@@ -152,19 +162,33 @@ const plugin = {
         const prefix = config.prefix ?? "openclaw-backup";
 
         if (action === "list-snapshots") {
-          const snapshots = await listSnapshots(b2, config.bucket, prefix);
-          if (snapshots.length === 0) {
-            return toolText("No snapshots found.", { snapshots });
+          const snapshots = await listRegularSnapshots(b2, config.bucket, prefix);
+          const safetySnapshots = await listSafetySnapshots(b2, config.bucket, prefix);
+          if (snapshots.length === 0 && safetySnapshots.length === 0) {
+            return toolText("No snapshots found.", { snapshots, safetySnapshots });
           }
+
+          const sections: string[] = [];
+          if (snapshots.length > 0) {
+            sections.push(`Regular snapshots:\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`);
+          }
+          if (safetySnapshots.length > 0) {
+            sections.push(
+              `Safety snapshots:\n${safetySnapshots.map((ts) => `  - ${ts}`).join("\n")}`,
+            );
+          }
+
           return toolText(
-            `Found ${snapshots.length} snapshot(s):\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`,
-            { snapshots },
+            `Found ${snapshots.length + safetySnapshots.length} snapshot(s):\n${sections.join("\n")}`,
+            { snapshots, safetySnapshots },
           );
         }
 
         if (action === "restore") {
           if (!snapshotId) {
-            return toolText("snapshot ID is required for restore action", { error: "snapshot ID is required" });
+            return toolText("snapshot ID is required for restore action", {
+              error: "snapshot ID is required",
+            });
           }
           await pullSnapshot(config, stateDir, b2, api.logger, snapshotId);
           return toolText(`Restored snapshot ${snapshotId}`, { snapshotId });

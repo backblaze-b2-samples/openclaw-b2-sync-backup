@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const USER_AGENT = "b2ai-openclaw (backblaze-b2-samples)";
+const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 250;
@@ -12,6 +12,10 @@ export type B2Client = {
   listObjects(bucket: string, prefix: string): Promise<B2ObjectEntry[]>;
   deleteObject(bucket: string, key: string): Promise<void>;
   headBucket(bucket: string): Promise<void>;
+};
+
+export type B2ClientWithPrefixes = B2Client & {
+  listPrefixes(bucket: string, prefix: string): Promise<string[]>;
 };
 
 export type B2ObjectEntry = {
@@ -173,7 +177,7 @@ export async function createB2Client(
       secretAccessKey: applicationKey,
     });
 
-  return {
+  const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
       const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
@@ -252,6 +256,47 @@ export async function createB2Client(
       return all;
     },
 
+    async listPrefixes(bucket, prefix) {
+      const all: string[] = [];
+      let continuationToken: string | undefined;
+
+      do {
+        const query: Record<string, string> = {
+          "list-type": "2",
+          prefix,
+          delimiter: "/",
+          "max-keys": "1000",
+        };
+        if (continuationToken) {
+          query["continuation-token"] = continuationToken;
+        }
+        const reqPath = `/${bucket}`;
+        const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
+        const qs = Object.entries(query)
+          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+          .join("&");
+        const resp = await fetchWithRetry(
+          `${resolvedEndpoint}${reqPath}?${qs}`,
+          {
+            method: "GET",
+            headers,
+          },
+          { operation: "listPrefixes", bucket, prefix },
+          clientOptions,
+        );
+        if (!resp.ok) {
+          const text = await resp.text().catch(() => "");
+          throw new Error(`b2 listPrefixes failed (${resp.status}): ${text}`);
+        }
+        const xml = await resp.text();
+        const page = parseListObjectsResponse(xml);
+        all.push(...page.prefixes);
+        continuationToken = page.nextToken;
+      } while (continuationToken);
+
+      return all;
+    },
+
     async deleteObject(bucket, key) {
       const path = `/${bucket}/${key}`;
       const headers = sign("DELETE", path, { host: endpointHost });
@@ -287,6 +332,8 @@ export async function createB2Client(
       }
     },
   };
+
+  return client;
 }
 
 function normalizeClientOptions(
@@ -573,6 +620,7 @@ function formatTarget(context: RequestContext): string {
 
 type ListObjectsPage = {
   entries: B2ObjectEntry[];
+  prefixes: string[];
   nextToken: string | undefined;
 };
 
@@ -588,10 +636,28 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
     entries.push({ key, size, lastModified });
   }
 
+  const prefixes: string[] = [];
+  const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
+  while ((match = commonPrefixRegex.exec(xml)) !== null) {
+    const block = match[1]!;
+    const prefix = normalizeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "");
+    if (prefix) {
+      prefixes.push(prefix);
+    }
+  }
+
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
   const nextToken = isTruncated
     ? xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1]
     : undefined;
 
-  return { entries, nextToken };
+  return { entries, prefixes, nextToken };
+}
+
+function normalizeXmlText(text: string): string {
+  return text
+    .replace(/\r\n|\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .join("");
 }

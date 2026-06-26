@@ -14,7 +14,8 @@
       "prefix":         { "type": "string" },
       "schedule":       { "type": "string" },
       "encrypt":        { "type": "boolean" },
-      "keepSnapshots":  { "type": "integer" }
+      "keepSnapshots":  { "type": "integer" },
+      "keepSafetySnapshots": { "type": "integer" }
     }
   },
   "uiHints": {
@@ -26,6 +27,7 @@
     "prefix":         { "label": "Key Prefix", "placeholder": "openclaw-backup", "advanced": true },
     "schedule":       { "label": "Schedule", "help": "daily, weekly, or cron expression", "advanced": true },
     "encrypt":        { "label": "Encrypt", "help": "AES-256-GCM (on by default)", "advanced": true },
-    "keepSnapshots":  { "label": "Snapshots to Keep", "help": "Number of snapshots retained for rollback (default: 10)", "advanced": true }
+    "keepSnapshots":  { "label": "Snapshots to Keep", "help": "Number of snapshots retained for rollback (default: 10)", "advanced": true },
+    "keepSafetySnapshots": { "label": "Safety Snapshots to Keep", "help": "Number of safety snapshots retained before cleanup (default: same as snapshots to keep)", "advanced": true }
   }
 }
