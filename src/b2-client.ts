@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 
 const USER_AGENT = "b2ai-openclaw (backblaze-b2-samples)";
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_RETRY_JITTER_MS = 250;
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -14,6 +18,35 @@ export type B2ObjectEntry = {
   key: string;
   size: number;
   lastModified: string;
+};
+
+export type B2ClientLogger = {
+  debug?: (msg: string) => void;
+  warn?: (msg: string) => void;
+};
+
+export type B2ClientOptions = {
+  endpoint?: string;
+  logger?: B2ClientLogger;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+  retryJitterMs?: number;
+  signal?: AbortSignal;
+  random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+type NormalizedB2ClientOptions = Required<
+  Pick<B2ClientOptions, "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryJitterMs">
+> &
+  Pick<B2ClientOptions, "endpoint" | "logger" | "signal" | "random" | "sleep">;
+
+type RequestContext = {
+  operation: string;
+  bucket: string;
+  key?: string;
+  prefix?: string;
 };
 
 type S3SignParams = {
@@ -104,15 +137,22 @@ function signRequest(params: S3SignParams): Record<string, string> {
   };
 }
 
-export { signRequest as _signRequest, parseListObjectsResponse as _parseListObjectsResponse };
+export {
+  signRequest as _signRequest,
+  parseListObjectsResponse as _parseListObjectsResponse,
+  resolveEndpoint as _resolveEndpoint,
+};
 
 export async function createB2Client(
   keyId: string,
   applicationKey: string,
-  region: string,
-  endpoint?: string,
+  region?: string,
+  endpointOrOptions?: string | B2ClientOptions,
+  options?: B2ClientOptions,
 ): Promise<B2Client> {
-  const resolvedEndpoint = resolveEndpoint(region, endpoint);
+  const clientOptions = normalizeClientOptions(endpointOrOptions, options);
+  const resolvedRegion = resolveRegion(region);
+  const resolvedEndpoint = resolveEndpoint(resolvedRegion, clientOptions.endpoint);
   const endpointHost = new URL(resolvedEndpoint).host;
 
   const sign = (
@@ -128,7 +168,7 @@ export async function createB2Client(
       query,
       headers: { ...headers, "user-agent": USER_AGENT },
       body,
-      region,
+      region: resolvedRegion,
       accessKeyId: keyId,
       secretAccessKey: applicationKey,
     });
@@ -137,11 +177,16 @@ export async function createB2Client(
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
       const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
-      const resp = await fetch(`${resolvedEndpoint}${path}`, {
-        method: "PUT",
-        headers,
-        body: new Uint8Array(body),
-      });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "PUT",
+          headers,
+          body: new Uint8Array(body),
+        },
+        { operation: "putObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 putObject failed (${resp.status}): ${text}`);
@@ -151,10 +196,15 @@ export async function createB2Client(
     async getObject(bucket, key) {
       const path = `/${bucket}/${key}`;
       const headers = sign("GET", path, { host: endpointHost });
-      const resp = await fetch(`${resolvedEndpoint}${path}`, {
-        method: "GET",
-        headers,
-      });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "GET",
+          headers,
+        },
+        { operation: "getObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 getObject failed (${resp.status}): ${text}`);
@@ -180,10 +230,15 @@ export async function createB2Client(
         const qs = Object.entries(query)
           .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join("&");
-        const resp = await fetch(`${resolvedEndpoint}${reqPath}?${qs}`, {
-          method: "GET",
-          headers,
-        });
+        const resp = await fetchWithRetry(
+          `${resolvedEndpoint}${reqPath}?${qs}`,
+          {
+            method: "GET",
+            headers,
+          },
+          { operation: "listObjects", bucket, prefix },
+          clientOptions,
+        );
         if (!resp.ok) {
           const text = await resp.text().catch(() => "");
           throw new Error(`b2 listObjects failed (${resp.status}): ${text}`);
@@ -200,10 +255,15 @@ export async function createB2Client(
     async deleteObject(bucket, key) {
       const path = `/${bucket}/${key}`;
       const headers = sign("DELETE", path, { host: endpointHost });
-      const resp = await fetch(`${resolvedEndpoint}${path}`, {
-        method: "DELETE",
-        headers,
-      });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "DELETE",
+          headers,
+        },
+        { operation: "deleteObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 deleteObject failed (${resp.status}): ${text}`);
@@ -213,10 +273,15 @@ export async function createB2Client(
     async headBucket(bucket) {
       const path = `/${bucket}`;
       const headers = sign("HEAD", path, { host: endpointHost });
-      const resp = await fetch(`${resolvedEndpoint}${path}`, {
-        method: "HEAD",
-        headers,
-      });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "HEAD",
+          headers,
+        },
+        { operation: "headBucket", bucket },
+        clientOptions,
+      );
       if (!resp.ok) {
         throw new Error(`b2 headBucket failed (${resp.status})`);
       }
@@ -224,13 +289,188 @@ export async function createB2Client(
   };
 }
 
+function normalizeClientOptions(
+  endpointOrOptions?: string | B2ClientOptions,
+  options?: B2ClientOptions,
+): NormalizedB2ClientOptions {
+  const endpoint =
+    typeof endpointOrOptions === "string" ? endpointOrOptions : endpointOrOptions?.endpoint;
+  const merged = {
+    ...(typeof endpointOrOptions === "string" ? undefined : endpointOrOptions),
+    ...options,
+    endpoint: options?.endpoint ?? endpoint,
+  };
+
+  return {
+    endpoint: merged.endpoint,
+    logger: merged.logger,
+    signal: merged.signal,
+    random: merged.random,
+    sleep: merged.sleep,
+    requestTimeoutMs: merged.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    maxRetries: merged.maxRetries ?? DEFAULT_MAX_RETRIES,
+    retryBaseDelayMs: merged.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+    retryJitterMs: merged.retryJitterMs ?? DEFAULT_RETRY_JITTER_MS,
+  };
+}
+
+function resolveRegion(region: string | undefined): string {
+  const resolvedRegion = region?.trim().toLowerCase();
+  if (!resolvedRegion) {
+    throw new Error(
+      "b2: region is required; set region in plugin config or B2_REGION. " +
+        "Native B2 region discovery was removed so storage requests stay on the S3-compatible API.",
+    );
+  }
+  return resolvedRegion;
+}
+
 function resolveEndpoint(region: string, endpoint?: string): string {
-  const rawEndpoint = endpoint?.trim() || `https://s3.${region}.backblazeb2.com`;
+  const expectedHost = `s3.${region}.backblazeb2.com`;
+  const rawEndpoint = endpoint?.trim() || `https://${expectedHost}`;
   const url = new URL(rawEndpoint);
-  url.pathname = url.pathname.replace(/\/+$/, "");
+
+  if (url.protocol !== "https:") {
+    throw new Error("b2: endpoint must use https");
+  }
+  if (url.username || url.password) {
+    throw new Error("b2: endpoint must not contain credentials");
+  }
+  if (url.hostname !== expectedHost) {
+    throw new Error(`b2: endpoint host must be ${expectedHost}`);
+  }
+  if (url.port) {
+    throw new Error("b2: endpoint must not include a custom port");
+  }
+  if (url.pathname && url.pathname !== "/") {
+    throw new Error("b2: endpoint must not include a path");
+  }
+
+  url.pathname = "";
   url.search = "";
   url.hash = "";
-  return url.toString().replace(/\/+$/, "");
+  return url.origin;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  context: RequestContext,
+  options: NormalizedB2ClientOptions,
+): Promise<Response> {
+  const maxAttempts = options.maxRetries + 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const startedAt = Date.now();
+    const { signal, cleanup } = createAttemptSignal(options.signal, options.requestTimeoutMs);
+    try {
+      const resp = await fetch(url, { ...init, signal });
+      const elapsedMs = Date.now() - startedAt;
+      logAttempt(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+
+      if (!isRetryableStatus(resp.status) || attempt === maxAttempts) {
+        return resp;
+      }
+
+      await resp.body?.cancel().catch(() => undefined);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+    } catch (err) {
+      const elapsedMs = Date.now() - startedAt;
+      const status = options.signal?.aborted ? "aborted" : signal.aborted ? "timeout" : "network-error";
+      lastError = err;
+      logAttempt(options, context, attempt, maxAttempts, status, elapsedMs);
+
+      if (attempt === maxAttempts || options.signal?.aborted) {
+        throw err;
+      }
+
+      await waitBeforeRetry(options, context, attempt, maxAttempts, status, elapsedMs);
+    } finally {
+      cleanup();
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function createAttemptSignal(parentSignal: AbortSignal | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`b2 request timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  timeout.unref?.();
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+async function waitBeforeRetry(
+  options: NormalizedB2ClientOptions,
+  context: RequestContext,
+  attempt: number,
+  maxAttempts: number,
+  status: string,
+  elapsedMs: number,
+): Promise<void> {
+  const delayMs = retryDelayMs(options, attempt);
+  options.logger?.warn?.(
+    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
+  );
+  await (options.sleep ?? sleep)(delayMs);
+}
+
+function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): number {
+  const jitter =
+    options.retryJitterMs > 0
+      ? Math.floor((options.random ?? Math.random)() * options.retryJitterMs)
+      : 0;
+  return options.retryBaseDelayMs * 2 ** (attempt - 1) + jitter;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function logAttempt(
+  options: NormalizedB2ClientOptions,
+  context: RequestContext,
+  attempt: number,
+  maxAttempts: number,
+  status: string,
+  elapsedMs: number,
+): void {
+  options.logger?.debug?.(
+    `b2 ${context.operation}: ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs}`,
+  );
+}
+
+function formatTarget(context: RequestContext): string {
+  const parts = [`bucket=${context.bucket}`];
+  if (context.key) {
+    parts.push(`key=${context.key}`);
+  }
+  if (context.prefix) {
+    parts.push(`prefix=${context.prefix}`);
+  }
+  return parts.join(" ");
 }
 
 type ListObjectsPage = {

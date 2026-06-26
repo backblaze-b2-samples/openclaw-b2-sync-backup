@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   _parseListObjectsResponse as parseListObjectsResponse,
+  _resolveEndpoint as resolveEndpoint,
   _signRequest as signRequest,
   createB2Client,
 } from "./b2-client.js";
@@ -240,6 +241,12 @@ describe("parseListObjectsResponse", () => {
 });
 
 describe("createB2Client", () => {
+  it("rejects missing region before network requests", async () => {
+    await expect(createB2Client("004test", "K004secret")).rejects.toThrow(
+      "region is required",
+    );
+  });
+
   it("adds the B2 samples user-agent to S3 requests", async () => {
     const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -261,5 +268,54 @@ describe("createB2Client", () => {
         }),
       }),
     );
+  });
+
+  it("retries transient B2 responses with attempt logging", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("try again", { status: 503 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      logger,
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterMs: 0,
+      sleep,
+    });
+
+    await b2.headBucket("bucket");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(1);
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("b2 headBucket: bucket=bucket attempt=1/2 status=503"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retrying bucket=bucket attempt=1/2 status=503"),
+    );
+  });
+});
+
+describe("resolveEndpoint", () => {
+  it("allows only the HTTPS Backblaze B2 S3 endpoint for the configured region", () => {
+    expect(resolveEndpoint("test-region")).toBe("https://s3.test-region.backblazeb2.com");
+    expect(resolveEndpoint("test-region", "https://s3.test-region.backblazeb2.com/")).toBe(
+      "https://s3.test-region.backblazeb2.com",
+    );
+  });
+
+  it.each([
+    ["http endpoint", "http://s3.test-region.backblazeb2.com"],
+    ["localhost endpoint", "https://localhost"],
+    ["link-local endpoint", "https://169.254.169.254"],
+    ["private-network endpoint", "https://10.0.0.1"],
+    ["credentialed endpoint", "https://user:pass@s3.test-region.backblazeb2.com"],
+    ["non-B2 endpoint", "https://example.com"],
+    ["wrong-region endpoint", "https://s3.other-region.backblazeb2.com"],
+  ])("rejects %s", (_label, endpoint) => {
+    expect(() => resolveEndpoint("test-region", endpoint)).toThrow();
   });
 });

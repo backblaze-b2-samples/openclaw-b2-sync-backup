@@ -3,16 +3,17 @@ import { createB2Client } from "./src/b2-client.js";
 import { createDebounceGate } from "./src/debounce.js";
 import { pullSnapshot } from "./src/pull.js";
 import { push } from "./src/push.js";
+import { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS } from "./src/push-coordinator.js";
 import { createB2BackupService } from "./src/service.js";
 import { listSnapshots } from "./src/snapshots.js";
-import type { B2BackupConfig } from "./src/types.js";
+import type { B2BackupConfig, ResolvedB2BackupConfig } from "./src/types.js";
 
 function readEnv(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
 }
 
-export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): B2BackupConfig | null {
+export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): ResolvedB2BackupConfig | null {
   const keyId = config?.keyId ?? readEnv("B2_KEY_ID");
   const applicationKey = config?.applicationKey ?? readEnv("B2_APPLICATION_KEY");
   const bucket = config?.bucket ?? readEnv("B2_BUCKET_NAME");
@@ -34,7 +35,7 @@ export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefine
 
 function toolText(text: string, details?: unknown) {
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: "text" as const, text }],
     details,
   };
 }
@@ -47,22 +48,36 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     const config = resolveB2BackupConfig(api.pluginConfig as Partial<B2BackupConfig> | undefined);
     if (!config) {
-      api.logger.warn("b2-backup: missing required config (keyId, applicationKey, bucket, region)");
+      api.logger.warn(
+        "b2-backup: missing required config (keyId, applicationKey, bucket, region). " +
+          "Set region in plugin config or B2_REGION in the environment; native B2 region discovery is not used.",
+      );
       return;
     }
 
     const stateDir = api.runtime.state.resolveStateDir();
     const debounce = createDebounceGate();
+    const pushCoordinator = createPushCoordinator(api.logger);
 
-    api.registerService(createB2BackupService(config));
+    api.registerService(createB2BackupService(config, pushCoordinator));
 
     api.on("gateway_stop", async () => {
-      try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
-        await push(config, stateDir, b2, api.logger);
-      } catch (err) {
-        api.logger.warn(`b2-backup: gateway_stop push failed: ${String(err)}`);
-      }
+      await pushCoordinator.run(
+        "gateway_stop",
+        async (signal) => {
+          try {
+            const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+              endpoint: config.endpoint,
+              logger: api.logger,
+              signal,
+            });
+            await push(config, stateDir, b2, api.logger);
+          } catch (err) {
+            api.logger.warn(`b2-backup: gateway_stop push failed: ${String(err)}`);
+          }
+        },
+        { deadlineMs: DEFAULT_PUSH_DEADLINE_MS },
+      );
     });
 
     api.on("before_compaction", async () => {
@@ -72,16 +87,23 @@ const plugin = {
         );
         return;
       }
-      try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
-        await push(config, stateDir, b2, api.logger);
-      } catch (err) {
-        api.logger.warn(`b2-backup: before_compaction push failed: ${String(err)}`);
-      }
+      await pushCoordinator.run("before_compaction", async (signal) => {
+        try {
+          const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: api.logger,
+            signal,
+          });
+          await push(config, stateDir, b2, api.logger);
+        } catch (err) {
+          api.logger.warn(`b2-backup: before_compaction push failed: ${String(err)}`);
+        }
+      });
     });
 
-    api.registerTool({
+    const rollbackTool = {
       name: "b2_rollback",
+      label: "B2 Rollback",
       description: "List and restore B2 backup snapshots",
       parameters: {
         type: "object",
@@ -98,11 +120,17 @@ const plugin = {
         },
         required: ["action"],
       },
-      async execute(_toolCallId: string, params: { action: string; timestamp?: string }) {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
+      async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
+        const action = typeof params.action === "string" ? params.action : "";
+        const timestamp = typeof params.timestamp === "string" ? params.timestamp : undefined;
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+          endpoint: config.endpoint,
+          logger: api.logger,
+          signal,
+        });
         const prefix = config.prefix ?? "openclaw-backup";
 
-        if (params.action === "list-snapshots") {
+        if (action === "list-snapshots") {
           const snapshots = await listSnapshots(b2, config.bucket, prefix);
           if (snapshots.length === 0) {
             return toolText("No snapshots found.", { snapshots });
@@ -113,17 +141,19 @@ const plugin = {
           );
         }
 
-        if (params.action === "restore") {
-          if (!params.timestamp) {
+        if (action === "restore") {
+          if (!timestamp) {
             return toolText("timestamp is required for restore action", { error: "timestamp is required" });
           }
-          await pullSnapshot(config, stateDir, b2, api.logger, params.timestamp);
-          return toolText(`Restored snapshot ${params.timestamp}`, { timestamp: params.timestamp });
+          await pullSnapshot(config, stateDir, b2, api.logger, timestamp);
+          return toolText(`Restored snapshot ${timestamp}`, { timestamp });
         }
 
-        return toolText(`Unknown action: ${params.action}`, { error: "unknown action" });
+        return toolText(`Unknown action: ${action}`, { error: "unknown action" });
       },
-    } as AnyAgentTool);
+    } satisfies AnyAgentTool;
+
+    api.registerTool(rollbackTool);
   },
 };
 

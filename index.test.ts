@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import register from "./index.js";
 
@@ -53,6 +54,22 @@ describe("b2-backup plugin", () => {
     );
     expect(api.registerService).not.toHaveBeenCalled();
     expect(api.on).not.toHaveBeenCalled();
+  });
+
+  it("warns and skips legacy three-field config until region is added", () => {
+    const api = createMockApi({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Set region in plugin config or B2_REGION"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+    expect(api.registerTool).not.toHaveBeenCalled();
   });
 
   it("exports correct plugin metadata", () => {
@@ -128,5 +145,13 @@ describe("b2-backup plugin", () => {
 
     expect(api.registerService).toHaveBeenCalledTimes(1);
     expect(api.on).toHaveBeenCalledWith("gateway_stop", expect.any(Function));
+  });
+
+  it("keeps the manifest schema permissive before runtime preflight", () => {
+    const manifest = JSON.parse(fs.readFileSync("openclaw.plugin.json", "utf8")) as {
+      configSchema: { required?: string[] };
+    };
+
+    expect(manifest.configSchema.required ?? []).toEqual([]);
   });
 });

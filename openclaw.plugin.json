@@ -5,7 +5,6 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["keyId", "applicationKey", "bucket", "region"],
     "properties": {
       "keyId":          { "type": "string" },
       "applicationKey": { "type": "string" },

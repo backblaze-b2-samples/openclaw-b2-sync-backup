@@ -69,7 +69,7 @@ That's it. The plugin uses Backblaze B2's S3-compatible API, encryption is on by
 
 ## Configuration
 
-All optional beyond the 4 required fields:
+Runtime requires the B2 key ID, application key, bucket, and region. They can come from plugin config or the standardized environment variables below. Existing three-field plugin configs still load, but backups pause with a clear warning until `region` or `B2_REGION` is added.
 
 | Setting | Type | Default | Required | Description |
 |---------|------|---------|----------|-------------|
@@ -92,6 +92,10 @@ B2_KEY_ID=your_key_id
 B2_APPLICATION_KEY=your_application_key
 B2_BUCKET_NAME=your-bucket-name
 ```
+
+### Region migration
+
+Native B2 authorize-based region discovery was removed so the runtime uses only the S3-compatible API for B2 storage operations. Existing configs that only include `keyId`, `applicationKey`, and `bucket` should add `region`; library callers of `createB2Client` should pass the region explicitly. Omitting region is still accepted at the type boundary for compatibility, but it fails fast before any network request.
 
 ## What Gets Synced
 
