@@ -17,7 +17,7 @@ export function deriveKey(applicationKey: string, salt: Buffer): Buffer {
   return crypto.scryptSync(applicationKey, salt, SCRYPT_KEYLEN, SCRYPT_OPTS);
 }
 
-export function encrypt(plaintext: Buffer, applicationKey: string): Buffer {
+export function encrypt(plaintext: Uint8Array, applicationKey: string): Buffer {
   const salt = crypto.randomBytes(SALT_LEN);
   const iv = crypto.randomBytes(IV_LEN);
   const key = deriveKey(applicationKey, salt);

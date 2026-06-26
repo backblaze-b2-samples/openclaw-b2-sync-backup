@@ -1,6 +1,6 @@
 # OpenClaw B2 Backup
 
-> Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage?utm_source=github&utm_medium=referral&utm_campaign=ai_artifacts&utm_content=openclaw). Install the plugin, set 3 fields, restart your gateway — backups happen automatically.
+> Automatic encrypted backup and sync of [OpenClaw](https://github.com/openclaw/openclaw) state to [Backblaze B2](https://www.backblaze.com/cloud-storage?utm_source=github&utm_medium=referral&utm_campaign=ai_artifacts&utm_content=openclaw). Install the plugin, set your B2 S3 settings, restart your gateway — backups happen automatically.
 
 ## What Is OpenClaw B2 Backup?
 
@@ -51,7 +51,8 @@ Open `~/.openclaw/openclaw.json` and add a `config` block to the `openclaw-b2-ba
   "config": {
     "keyId": "004a...",
     "applicationKey": "K004...",
-    "bucket": "my-openclaw-backups"
+    "bucket": "my-openclaw-backups",
+    "region": "your-b2-region"
   }
 }
 ```
@@ -64,23 +65,38 @@ You can also configure these fields in the Control UI under plugin settings.
 openclaw gateway restart
 ```
 
-That's it. Region is auto-detected, encryption is on by default, and the first backup runs at midnight.
+That's it. The plugin uses Backblaze B2's S3-compatible API, encryption is on by default, and the first backup runs at midnight.
 
 ## Configuration
 
-All optional beyond the 3 required fields:
+Runtime requires the B2 key ID, application key, bucket, and region. They can come from plugin config or the standardized environment variables below. Existing three-field plugin configs still load, but backups pause with a clear warning until `region` or `B2_REGION` is added.
 
 | Setting | Type | Default | Required | Description |
 |---------|------|---------|----------|-------------|
 | `keyId` | string | — | Yes | B2 application key ID |
 | `applicationKey` | string | — | Yes | B2 application key (also used as encryption key source) |
 | `bucket` | string | — | Yes | B2 bucket name |
-| `region` | string | Auto-detected | No | B2 region (derived from key if omitted) |
+| `region` | string | — | Yes | B2 region used for S3 request signing |
+| `endpoint` | string | Derived from `region` | No | B2 S3-compatible endpoint |
 | `prefix` | string | `"openclaw-backup"` | No | Object key prefix in the bucket |
 | `schedule` | string | `"daily"` | No | `"daily"`, `"weekly"`, or a cron expression |
 | `encrypt` | boolean | `true` | No | AES-256-GCM encryption before upload |
 | `keepSnapshots` | number | `10` | No | Snapshots retained; oldest auto-pruned |
 | `keepSafetySnapshots` | number | Same as `keepSnapshots` | No | Safety snapshots retained; oldest safety prefixes auto-pruned separately |
+
+For environment-based deployments, use the standardized names shown in `.env.example`:
+
+```bash
+B2_ENDPOINT=https://s3.your-b2-region.backblazeb2.com
+B2_REGION=your-b2-region
+B2_APPLICATION_KEY_ID=your_key_id
+B2_APPLICATION_KEY=your_application_key
+B2_BUCKET_NAME=your-bucket-name
+```
+
+### Region migration
+
+Native B2 authorize-based region discovery was removed so the runtime uses only the S3-compatible API for B2 storage operations. Existing configs that only include `keyId`, `applicationKey`, and `bucket` should add `region`; library callers of `createB2Client` should pass the region explicitly. Omitting region is still accepted at the type boundary for compatibility, but it fails fast before any network request.
 
 ## What Gets Synced
 
@@ -130,7 +146,7 @@ Restore from a pre-compromise snapshot, rotate your secrets, and you're back to 
 
 ```bash
 openclaw plugins install openclaw-b2-backup
-# Add your B2 config (keyId, applicationKey, bucket) to the openclaw-b2-backup entry in openclaw.json
+# Add your B2 config (keyId, applicationKey, bucket, region) to the openclaw-b2-backup entry in openclaw.json
 openclaw gateway restart
 # Plugin detects empty state + existing snapshots → auto-restores latest
 ```
@@ -195,7 +211,7 @@ Zero external dependencies beyond what OpenClaw already ships:
 
 | Need | Solution |
 |------|----------|
-| S3 API calls | Hand-rolled AWS Sig V4 signing (`node:crypto`) |
+| S3 API calls | Hand-rolled Sig V4 signing against the B2 S3-compatible API (`node:crypto`) |
 | Encryption | AES-256-GCM, scrypt key derivation from `applicationKey` |
 | Scheduling | `croner` (already in OpenClaw core) |
 | SQLite snapshots | `node:sqlite` `.backup()` API (Node 22+) |

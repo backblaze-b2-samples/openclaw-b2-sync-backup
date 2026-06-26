@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { decrypt, deriveKey, encrypt, isEncrypted } from "./encryption.js";
 
 describe("encryption", () => {
-  const appKey = "K004testapplicationkey1234567890ab";
+  const appKey = "test-application-key-for-encryption";
 
   describe("deriveKey", () => {
     it("produces a 32-byte key", () => {

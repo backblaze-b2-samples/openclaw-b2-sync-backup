@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import register from "./index.js";
+import fs from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import register, { resolveB2BackupConfig } from "./index.js";
 
 function createMockApi(config: Record<string, unknown> = {}) {
   return {
@@ -14,11 +15,24 @@ function createMockApi(config: Record<string, unknown> = {}) {
 }
 
 describe("b2-backup plugin", () => {
+  beforeEach(() => {
+    vi.stubEnv("B2_ENDPOINT", "");
+    vi.stubEnv("B2_REGION", "");
+    vi.stubEnv("B2_APPLICATION_KEY_ID", "");
+    vi.stubEnv("B2_APPLICATION_KEY", "");
+    vi.stubEnv("B2_BUCKET_NAME", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("registers service and gateway_stop hook when config is provided", () => {
     const api = createMockApi({
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -42,6 +56,96 @@ describe("b2-backup plugin", () => {
     expect(api.on).not.toHaveBeenCalled();
   });
 
+  it("warns and skips legacy three-field config until region is added", () => {
+    const api = createMockApi({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("B2_APPLICATION_KEY_ID"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+    expect(api.registerTool).not.toHaveBeenCalled();
+  });
+
+  it("treats whitespace plugin config values as missing", () => {
+    const api = createMockApi({
+      keyId: "   ",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("missing required config"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+  });
+
+  it("treats non-string plugin config values as missing", () => {
+    const api = createMockApi({
+      keyId: 123,
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("missing required config"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+  });
+
+  it("normalizes optional string config fields", () => {
+    const config = resolveB2BackupConfig({
+      keyId: " test-key ",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      endpoint: "   ",
+      prefix: " backups ",
+      schedule: "   ",
+      encrypt: false,
+      keepSnapshots: 3,
+    });
+
+    expect(config).toEqual({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      prefix: "backups",
+      encrypt: false,
+      keepSnapshots: 3,
+    });
+  });
+
+  it("ignores mistyped optional config fields", () => {
+    const config = resolveB2BackupConfig({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: "false",
+      keepSnapshots: "3",
+    } as any);
+
+    expect(config).toEqual({
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+  });
+
   it("exports correct plugin metadata", () => {
     expect(register.id).toBe("openclaw-b2-backup");
     expect(register.name).toBe("Backblaze B2 Backup");
@@ -52,6 +156,7 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -64,11 +169,17 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
 
     expect(api.registerTool).toHaveBeenCalledTimes(1);
+    const tool = api.registerTool.mock.calls[0]![0] as {
+      parameters: { properties: Record<string, { description: string }> };
+    };
+    expect(tool.parameters.properties.snapshotId?.description).toContain("Snapshot ID");
+    expect(tool.parameters.properties.timestamp?.description).toContain("Deprecated alias");
     expect(api.registerTool).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "b2_rollback",
@@ -82,6 +193,7 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -98,5 +210,27 @@ describe("b2-backup plugin", () => {
     register.register(api as any);
 
     expect(api.registerTool).not.toHaveBeenCalled();
+  });
+
+  it("uses standardized B2 env vars as config fallbacks", () => {
+    vi.stubEnv("B2_ENDPOINT", "https://s3.test-region.backblazeb2.com");
+    vi.stubEnv("B2_REGION", "test-region");
+    vi.stubEnv("B2_APPLICATION_KEY_ID", "env-key");
+    vi.stubEnv("B2_APPLICATION_KEY", "env-secret");
+    vi.stubEnv("B2_BUCKET_NAME", "env-bucket");
+    const api = createMockApi();
+
+    register.register(api as any);
+
+    expect(api.registerService).toHaveBeenCalledTimes(1);
+    expect(api.on).toHaveBeenCalledWith("gateway_stop", expect.any(Function));
+  });
+
+  it("keeps the manifest schema permissive before runtime preflight", () => {
+    const manifest = JSON.parse(fs.readFileSync("openclaw.plugin.json", "utf8")) as {
+      configSchema: { required?: string[] };
+    };
+
+    expect(manifest.configSchema.required ?? []).toEqual([]);
   });
 });

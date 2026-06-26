@@ -10,6 +10,8 @@ export { pullLatest, pullSnapshot } from "./pull.js";
 export type { PullOptions } from "./pull.js";
 export { push } from "./push.js";
 export type { PushOptions } from "./push.js";
+export { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS } from "./push-coordinator.js";
+export type { PushCoordinator, PushCoordinatorRunOptions } from "./push-coordinator.js";
 export { createB2BackupService } from "./service.js";
 export {
   getLatestSnapshot,

@@ -121,8 +121,8 @@ export async function pruneSnapshots(
   if (snapshots.length <= keep) return [];
 
   const toDelete = snapshots.slice(0, snapshots.length - keep);
-  for (const ts of toDelete) {
-    const objects = await b2.listObjects(bucket, `${prefix}/${ts}/`);
+  for (const snapshotId of toDelete) {
+    const objects = await b2.listObjects(bucket, `${prefix}/${snapshotId}/`);
     for (const obj of objects) {
       await b2.deleteObject(bucket, obj.key);
     }

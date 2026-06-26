@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 
 const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_MAX_RETRIES = 2;
+const DEFAULT_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_RETRY_JITTER_MS = 250;
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -18,6 +22,35 @@ export type B2ObjectEntry = {
   key: string;
   size: number;
   lastModified: string;
+};
+
+export type B2ClientLogger = {
+  debug?: (msg: string) => void;
+  warn?: (msg: string) => void;
+};
+
+export type B2ClientOptions = {
+  endpoint?: string;
+  logger?: B2ClientLogger;
+  requestTimeoutMs?: number;
+  maxRetries?: number;
+  retryBaseDelayMs?: number;
+  retryJitterMs?: number;
+  signal?: AbortSignal;
+  random?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+type NormalizedB2ClientOptions = Required<
+  Pick<B2ClientOptions, "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryJitterMs">
+> &
+  Pick<B2ClientOptions, "endpoint" | "logger" | "signal" | "random" | "sleep">;
+
+type RequestContext = {
+  operation: string;
+  bucket: string;
+  key?: string;
+  prefix?: string;
 };
 
 type S3SignParams = {
@@ -108,16 +141,23 @@ function signRequest(params: S3SignParams): Record<string, string> {
   };
 }
 
-export { signRequest as _signRequest, parseListObjectsResponse as _parseListObjectsResponse };
+export {
+  signRequest as _signRequest,
+  parseListObjectsResponse as _parseListObjectsResponse,
+  resolveEndpoint as _resolveEndpoint,
+};
 
 export async function createB2Client(
   keyId: string,
   applicationKey: string,
   region?: string,
+  endpointOrOptions?: string | B2ClientOptions,
+  options?: B2ClientOptions,
 ): Promise<B2Client> {
-  // Authorize with B2 to discover the region if not provided.
-  const resolvedRegion = region ?? (await discoverRegion(keyId, applicationKey));
-  const endpoint = `https://s3.${resolvedRegion}.backblazeb2.com`;
+  const clientOptions = normalizeClientOptions(endpointOrOptions, options);
+  const resolvedRegion = resolveRegion(region);
+  const resolvedEndpoint = resolveEndpoint(resolvedRegion, clientOptions.endpoint);
+  const endpointHost = new URL(resolvedEndpoint).host;
 
   const sign = (
     method: string,
@@ -140,12 +180,17 @@ export async function createB2Client(
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("PUT", path, { host: new URL(endpoint).host, "content-type": contentType }, body);
-      const resp = await fetch(`${endpoint}${path}`, {
-        method: "PUT",
-        headers,
-        body: new Uint8Array(body),
-      });
+      const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "PUT",
+          headers,
+          body: new Uint8Array(body),
+        },
+        { operation: "putObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 putObject failed (${resp.status}): ${text}`);
@@ -154,11 +199,16 @@ export async function createB2Client(
 
     async getObject(bucket, key) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("GET", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
-        method: "GET",
-        headers,
-      });
+      const headers = sign("GET", path, { host: endpointHost });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "GET",
+          headers,
+        },
+        { operation: "getObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 getObject failed (${resp.status}): ${text}`);
@@ -180,14 +230,19 @@ export async function createB2Client(
           query["continuation-token"] = continuationToken;
         }
         const reqPath = `/${bucket}`;
-        const headers = sign("GET", reqPath, { host: new URL(endpoint).host }, "", query);
+        const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
         const qs = Object.entries(query)
           .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join("&");
-        const resp = await fetch(`${endpoint}${reqPath}?${qs}`, {
-          method: "GET",
-          headers,
-        });
+        const resp = await fetchWithRetry(
+          `${resolvedEndpoint}${reqPath}?${qs}`,
+          {
+            method: "GET",
+            headers,
+          },
+          { operation: "listObjects", bucket, prefix },
+          clientOptions,
+        );
         if (!resp.ok) {
           const text = await resp.text().catch(() => "");
           throw new Error(`b2 listObjects failed (${resp.status}): ${text}`);
@@ -216,14 +271,19 @@ export async function createB2Client(
           query["continuation-token"] = continuationToken;
         }
         const reqPath = `/${bucket}`;
-        const headers = sign("GET", reqPath, { host: new URL(endpoint).host }, "", query);
+        const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
         const qs = Object.entries(query)
           .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join("&");
-        const resp = await fetch(`${endpoint}${reqPath}?${qs}`, {
-          method: "GET",
-          headers,
-        });
+        const resp = await fetchWithRetry(
+          `${resolvedEndpoint}${reqPath}?${qs}`,
+          {
+            method: "GET",
+            headers,
+          },
+          { operation: "listPrefixes", bucket, prefix },
+          clientOptions,
+        );
         if (!resp.ok) {
           const text = await resp.text().catch(() => "");
           throw new Error(`b2 listPrefixes failed (${resp.status}): ${text}`);
@@ -239,11 +299,16 @@ export async function createB2Client(
 
     async deleteObject(bucket, key) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("DELETE", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
-        method: "DELETE",
-        headers,
-      });
+      const headers = sign("DELETE", path, { host: endpointHost });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "DELETE",
+          headers,
+        },
+        { operation: "deleteObject", bucket, key },
+        clientOptions,
+      );
       if (!resp.ok) {
         const text = await resp.text().catch(() => "");
         throw new Error(`b2 deleteObject failed (${resp.status}): ${text}`);
@@ -252,11 +317,16 @@ export async function createB2Client(
 
     async headBucket(bucket) {
       const path = `/${bucket}`;
-      const headers = sign("HEAD", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
-        method: "HEAD",
-        headers,
-      });
+      const headers = sign("HEAD", path, { host: endpointHost });
+      const resp = await fetchWithRetry(
+        `${resolvedEndpoint}${path}`,
+        {
+          method: "HEAD",
+          headers,
+        },
+        { operation: "headBucket", bucket },
+        clientOptions,
+      );
       if (!resp.ok) {
         throw new Error(`b2 headBucket failed (${resp.status})`);
       }
@@ -266,26 +336,286 @@ export async function createB2Client(
   return client;
 }
 
-async function discoverRegion(keyId: string, applicationKey: string): Promise<string> {
-  const auth = Buffer.from(`${keyId}:${applicationKey}`).toString("base64");
-  const resp = await fetch("https://api.backblazeb2.com/b2api/v3/b2_authorize_account", {
-    headers: { authorization: `Basic ${auth}`, "user-agent": USER_AGENT },
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`b2 authorize failed (${resp.status}): ${text}`);
-  }
-  const data = (await resp.json()) as {
-    s3ApiUrl?: string;
-    apiInfo?: { storageApi?: { s3ApiUrl?: string } };
+function normalizeClientOptions(
+  endpointOrOptions?: string | B2ClientOptions,
+  options?: B2ClientOptions,
+): NormalizedB2ClientOptions {
+  const endpoint =
+    typeof endpointOrOptions === "string" ? endpointOrOptions : endpointOrOptions?.endpoint;
+  const merged = {
+    ...(typeof endpointOrOptions === "string" ? undefined : endpointOrOptions),
+    ...options,
+    endpoint: options?.endpoint ?? endpoint,
   };
-  // v3 nests s3ApiUrl under apiInfo.storageApi; v2 has it at top level
-  const s3ApiUrl = data.apiInfo?.storageApi?.s3ApiUrl ?? data.s3ApiUrl;
-  const match = s3ApiUrl?.match(/s3\.([^.]+)\.backblazeb2\.com/);
-  if (!match?.[1]) {
-    throw new Error("b2: could not determine region from authorize response");
+
+  return {
+    endpoint: merged.endpoint,
+    logger: merged.logger,
+    signal: merged.signal,
+    random: merged.random,
+    sleep: merged.sleep,
+    requestTimeoutMs: positiveNumber(
+      merged.requestTimeoutMs,
+      DEFAULT_REQUEST_TIMEOUT_MS,
+      "requestTimeoutMs",
+    ),
+    maxRetries: nonNegativeInteger(merged.maxRetries, DEFAULT_MAX_RETRIES, "maxRetries"),
+    retryBaseDelayMs: nonNegativeNumber(
+      merged.retryBaseDelayMs,
+      DEFAULT_RETRY_BASE_DELAY_MS,
+      "retryBaseDelayMs",
+    ),
+    retryJitterMs: nonNegativeNumber(
+      merged.retryJitterMs,
+      DEFAULT_RETRY_JITTER_MS,
+      "retryJitterMs",
+    ),
+  };
+}
+
+function positiveNumber(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error(`b2: ${name} must be a positive finite number`);
   }
-  return match[1];
+  return resolved;
+}
+
+function nonNegativeNumber(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved < 0) {
+    throw new Error(`b2: ${name} must be a non-negative finite number`);
+  }
+  return resolved;
+}
+
+function nonNegativeInteger(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved < 0) {
+    throw new Error(`b2: ${name} must be a non-negative finite integer`);
+  }
+  return resolved;
+}
+
+function resolveRegion(region: string | undefined): string {
+  const resolvedRegion = region?.trim().toLowerCase();
+  if (!resolvedRegion) {
+    throw new Error(
+      "b2: region is required; set region in plugin config or B2_REGION. " +
+        "Native B2 region discovery was removed so storage requests stay on the S3-compatible API.",
+    );
+  }
+  return resolvedRegion;
+}
+
+function resolveEndpoint(region: string, endpoint?: string): string {
+  const expectedHost = `s3.${region}.backblazeb2.com`;
+  const rawEndpoint = endpoint?.trim() || `https://${expectedHost}`;
+  let url: URL;
+  try {
+    url = new URL(rawEndpoint);
+  } catch {
+    throw new Error("b2: endpoint must be a valid URL");
+  }
+
+  if (url.protocol !== "https:") {
+    throw new Error("b2: endpoint must use https");
+  }
+  if (url.username || url.password) {
+    throw new Error("b2: endpoint must not contain credentials");
+  }
+  if (url.hostname !== expectedHost) {
+    throw new Error(`b2: endpoint host must be ${expectedHost}`);
+  }
+  if (url.port) {
+    throw new Error("b2: endpoint must not include a custom port");
+  }
+  if (url.pathname && url.pathname !== "/") {
+    throw new Error("b2: endpoint must not include a path");
+  }
+
+  url.pathname = "";
+  url.search = "";
+  url.hash = "";
+  return url.origin;
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+  context: RequestContext,
+  options: NormalizedB2ClientOptions,
+): Promise<Response> {
+  const maxAttempts = options.maxRetries + 1;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const startedAt = Date.now();
+    const { signal, cleanup } = createAttemptSignal(options.signal, options.requestTimeoutMs);
+    try {
+      const resp = await fetch(url, { ...init, signal });
+      const elapsedMs = Date.now() - startedAt;
+      logAttempt(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+
+      if (!isRetryableStatus(resp.status) || attempt === maxAttempts) {
+        return resp;
+      }
+
+      await resp.body?.cancel().catch(() => undefined);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+    } catch (err) {
+      const elapsedMs = Date.now() - startedAt;
+      const status = options.signal?.aborted ? "aborted" : signal.aborted ? "timeout" : "network-error";
+      lastError = err;
+      logAttempt(options, context, attempt, maxAttempts, status, elapsedMs);
+
+      if (attempt === maxAttempts || options.signal?.aborted) {
+        throw err;
+      }
+
+      await waitBeforeRetry(options, context, attempt, maxAttempts, status, elapsedMs);
+    } finally {
+      cleanup();
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function createAttemptSignal(parentSignal: AbortSignal | undefined, timeoutMs: number) {
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+
+  const timeout = setTimeout(
+    () => controller.abort(new Error(`b2 request timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  timeout.unref?.();
+
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+  };
+}
+
+async function waitBeforeRetry(
+  options: NormalizedB2ClientOptions,
+  context: RequestContext,
+  attempt: number,
+  maxAttempts: number,
+  status: string,
+  elapsedMs: number,
+): Promise<void> {
+  if (options.signal?.aborted) {
+    throw abortReason(options.signal);
+  }
+  const delayMs = retryDelayMs(options, attempt);
+  options.logger?.warn?.(
+    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
+  );
+  await sleepWithSignal(delayMs, options.signal, options.sleep);
+}
+
+function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): number {
+  const jitter =
+    options.retryJitterMs > 0
+      ? Math.floor((options.random ?? Math.random)() * options.retryJitterMs)
+      : 0;
+  return options.retryBaseDelayMs * 2 ** (attempt - 1) + jitter;
+}
+
+async function sleepWithSignal(
+  ms: number,
+  signal: AbortSignal | undefined,
+  customSleep: ((ms: number) => Promise<void>) | undefined,
+): Promise<void> {
+  if (!signal && customSleep) {
+    await customSleep(ms);
+    return;
+  }
+  if (!signal) {
+    await sleep(ms);
+    return;
+  }
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+  if (!customSleep) {
+    await sleep(ms, signal);
+    return;
+  }
+
+  let onAbort!: () => void;
+  const aborted = new Promise<void>((_resolve, reject) => {
+    onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    await Promise.race([customSleep(ms), aborted]);
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise((resolve, reject) => {
+    let onAbort: (() => void) | undefined;
+    const timeout = setTimeout(() => {
+      if (onAbort) signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    timeout.unref?.();
+    if (signal) {
+      onAbort = () => {
+        clearTimeout(timeout);
+        reject(abortReason(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error("b2 request aborted");
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+function logAttempt(
+  options: NormalizedB2ClientOptions,
+  context: RequestContext,
+  attempt: number,
+  maxAttempts: number,
+  status: string,
+  elapsedMs: number,
+): void {
+  options.logger?.debug?.(
+    `b2 ${context.operation}: ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs}`,
+  );
+}
+
+function formatTarget(context: RequestContext): string {
+  const parts = [`bucket=${context.bucket}`];
+  if (context.key) {
+    parts.push(`key=${context.key}`);
+  }
+  if (context.prefix) {
+    parts.push(`prefix=${context.prefix}`);
+  }
+  return parts.join(" ");
 }
 
 type ListObjectsPage = {

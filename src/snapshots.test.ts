@@ -187,6 +187,16 @@ describe("snapshots", () => {
       const latest = await getLatestSnapshot(b2, bucket, prefix);
       expect(latest).toBeNull();
     });
+
+    it("ignores safety snapshots when selecting latest", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-03T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/safety-2026-01-04T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ]);
+
+      const latest = await getLatestSnapshot(b2, bucket, prefix);
+      expect(latest).toBe("2026-01-03T00-00-00Z");
+    });
   });
 
   describe("pruneSnapshots", () => {
