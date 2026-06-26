@@ -7,16 +7,16 @@ export async function listSnapshots(
   prefix: string,
 ): Promise<string[]> {
   const objects = await b2.listObjects(bucket, `${prefix}/`);
-  const timestamps = new Set<string>();
+  const snapshotIds = new Set<string>();
   for (const obj of objects) {
-    // Keys look like: prefix/2026-02-09T00-00-00Z/file.json
+    // Keys look like: prefix/<snapshot-id>/file.json; safety snapshots are excluded.
     const afterPrefix = obj.key.slice(prefix.length + 1);
-    const tsDir = afterPrefix.split("/")[0];
-    if (tsDir && tsDir !== "manifest.json" && !tsDir.startsWith(`${SAFETY_PREFIX}-`)) {
-      timestamps.add(tsDir);
+    const snapshotId = afterPrefix.split("/")[0];
+    if (snapshotId && snapshotId !== "manifest.json" && !snapshotId.startsWith(`${SAFETY_PREFIX}-`)) {
+      snapshotIds.add(snapshotId);
     }
   }
-  return [...timestamps].sort();
+  return [...snapshotIds].sort();
 }
 
 export async function getLatestSnapshot(
@@ -38,8 +38,8 @@ export async function pruneSnapshots(
   if (snapshots.length <= keep) return [];
 
   const toDelete = snapshots.slice(0, snapshots.length - keep);
-  for (const ts of toDelete) {
-    const objects = await b2.listObjects(bucket, `${prefix}/${ts}/`);
+  for (const snapshotId of toDelete) {
+    const objects = await b2.listObjects(bucket, `${prefix}/${snapshotId}/`);
     for (const obj of objects) {
       await b2.deleteObject(bucket, obj.key);
     }

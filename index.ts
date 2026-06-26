@@ -85,16 +85,12 @@ const plugin = {
       await pushCoordinator.run(
         "gateway_stop",
         async (signal) => {
-          try {
-            const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
-              endpoint: config.endpoint,
-              logger: api.logger,
-              signal,
-            });
-            await push(config, stateDir, b2, api.logger);
-          } catch (err) {
-            api.logger.warn(`b2-backup: gateway_stop push failed: ${String(err)}`);
-          }
+          const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: api.logger,
+            signal,
+          });
+          await push(config, stateDir, b2, api.logger);
         },
         { deadlineMs: DEFAULT_PUSH_DEADLINE_MS },
       );
@@ -108,16 +104,12 @@ const plugin = {
         return;
       }
       await pushCoordinator.run("before_compaction", async (signal) => {
-        try {
-          const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
-            endpoint: config.endpoint,
-            logger: api.logger,
-            signal,
-          });
-          await push(config, stateDir, b2, api.logger);
-        } catch (err) {
-          api.logger.warn(`b2-backup: before_compaction push failed: ${String(err)}`);
-        }
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+          endpoint: config.endpoint,
+          logger: api.logger,
+          signal,
+        });
+        await push(config, stateDir, b2, api.logger);
       });
     });
 

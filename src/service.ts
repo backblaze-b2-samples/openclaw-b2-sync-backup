@@ -66,16 +66,12 @@ export function createB2BackupService(
       const cronExpr = resolveSchedule(config.schedule);
       cron = new Cron(cronExpr, async () => {
         await coordinator!.run("cron", async (signal) => {
-          try {
-            const cronB2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
-              endpoint: config.endpoint,
-              logger: ctx.logger,
-              signal,
-            });
-            await push(config, ctx.stateDir, cronB2, ctx.logger);
-          } catch (err) {
-            ctx.logger.error(`b2-backup: scheduled push failed: ${String(err)}`);
-          }
+          const cronB2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: ctx.logger,
+            signal,
+          });
+          await push(config, ctx.stateDir, cronB2, ctx.logger);
         });
       });
     },
@@ -89,16 +85,12 @@ export function createB2BackupService(
       await coordinator.run(
         "shutdown",
         async (signal) => {
-          try {
-            const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
-              endpoint: config.endpoint,
-              logger: ctx.logger,
-              signal,
-            });
-            await push(config, ctx.stateDir, b2, ctx.logger);
-          } catch (err) {
-            ctx.logger.warn(`b2-backup: shutdown push failed: ${String(err)}`);
-          }
+          const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: ctx.logger,
+            signal,
+          });
+          await push(config, ctx.stateDir, b2, ctx.logger);
         },
         { deadlineMs: DEFAULT_PUSH_DEADLINE_MS },
       );
