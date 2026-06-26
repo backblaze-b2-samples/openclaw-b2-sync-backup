@@ -88,7 +88,7 @@ For environment-based deployments, use the standardized names shown in `.env.exa
 ```bash
 B2_ENDPOINT=https://s3.your-b2-region.backblazeb2.com
 B2_REGION=your-b2-region
-B2_KEY_ID=your_key_id
+B2_APPLICATION_KEY_ID=your_key_id
 B2_APPLICATION_KEY=your_application_key
 B2_BUCKET_NAME=your-bucket-name
 ```

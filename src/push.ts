@@ -85,7 +85,7 @@ export async function push(
         batch.map(async (relativePath) => {
           const file = files.find((f) => f.relativePath === relativePath);
           if (!file) return;
-          const fileBody = Buffer.from(await fs.promises.readFile(file.absolutePath));
+          const fileBody = await fs.promises.readFile(file.absolutePath);
           const body = shouldEncrypt ? encrypt(fileBody, config.applicationKey) : fileBody;
           const key = `${prefix}/${snapshotId}/${relativePath}`;
           await b2.putObject(config.bucket, key, body, "application/octet-stream");

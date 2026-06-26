@@ -14,7 +14,7 @@ function readEnv(name: string): string | undefined {
 }
 
 export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): ResolvedB2BackupConfig | null {
-  const keyId = config?.keyId ?? readEnv("B2_KEY_ID");
+  const keyId = config?.keyId ?? readEnv("B2_APPLICATION_KEY_ID");
   const applicationKey = config?.applicationKey ?? readEnv("B2_APPLICATION_KEY");
   const bucket = config?.bucket ?? readEnv("B2_BUCKET_NAME");
   const region = config?.region ?? readEnv("B2_REGION");
@@ -50,7 +50,8 @@ const plugin = {
     if (!config) {
       api.logger.warn(
         "b2-backup: missing required config (keyId, applicationKey, bucket, region). " +
-          "Set region in plugin config or B2_REGION in the environment; native B2 region discovery is not used.",
+          "Set region in plugin config or B2_REGION in the environment; use B2_APPLICATION_KEY_ID for env config. " +
+          "Native B2 region discovery is not used.",
       );
       return;
     }

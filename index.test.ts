@@ -18,7 +18,7 @@ describe("b2-backup plugin", () => {
   beforeEach(() => {
     vi.stubEnv("B2_ENDPOINT", "");
     vi.stubEnv("B2_REGION", "");
-    vi.stubEnv("B2_KEY_ID", "");
+    vi.stubEnv("B2_APPLICATION_KEY_ID", "");
     vi.stubEnv("B2_APPLICATION_KEY", "");
     vi.stubEnv("B2_BUCKET_NAME", "");
   });
@@ -66,7 +66,7 @@ describe("b2-backup plugin", () => {
     register.register(api as any);
 
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Set region in plugin config or B2_REGION"),
+      expect.stringContaining("B2_APPLICATION_KEY_ID"),
     );
     expect(api.registerService).not.toHaveBeenCalled();
     expect(api.registerTool).not.toHaveBeenCalled();
@@ -136,7 +136,7 @@ describe("b2-backup plugin", () => {
   it("uses standardized B2 env vars as config fallbacks", () => {
     vi.stubEnv("B2_ENDPOINT", "https://s3.test-region.backblazeb2.com");
     vi.stubEnv("B2_REGION", "test-region");
-    vi.stubEnv("B2_KEY_ID", "env-key");
+    vi.stubEnv("B2_APPLICATION_KEY_ID", "env-key");
     vi.stubEnv("B2_APPLICATION_KEY", "env-secret");
     vi.stubEnv("B2_BUCKET_NAME", "env-bucket");
     const api = createMockApi();
