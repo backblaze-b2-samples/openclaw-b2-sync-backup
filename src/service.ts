@@ -5,8 +5,9 @@ import { createB2Client } from "./b2-client.js";
 import { gatherFiles } from "./gatherer.js";
 import { pullLatest } from "./pull.js";
 import { push } from "./push.js";
+import { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS, type PushCoordinator } from "./push-coordinator.js";
 import { getLatestSnapshot } from "./snapshots.js";
-import type { B2BackupConfig } from "./types.js";
+import type { ResolvedB2BackupConfig } from "./types.js";
 
 function resolveSchedule(schedule: string | undefined): string {
   switch (schedule) {
@@ -20,14 +21,22 @@ function resolveSchedule(schedule: string | undefined): string {
   }
 }
 
-export function createB2BackupService(config: B2BackupConfig): OpenClawPluginService {
+export function createB2BackupService(
+  config: ResolvedB2BackupConfig,
+  pushCoordinator?: PushCoordinator,
+): OpenClawPluginService {
   let cron: Cron | null = null;
+  let coordinator = pushCoordinator;
 
   return {
     id: "b2-backup",
 
     async start(ctx: OpenClawPluginServiceContext) {
-      const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+      coordinator ??= createPushCoordinator(ctx.logger);
+      const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+        endpoint: config.endpoint,
+        logger: ctx.logger,
+      });
 
       // Verify bucket access
       try {
@@ -56,11 +65,14 @@ export function createB2BackupService(config: B2BackupConfig): OpenClawPluginSer
 
       const cronExpr = resolveSchedule(config.schedule);
       cron = new Cron(cronExpr, async () => {
-        try {
-          await push(config, ctx.stateDir, b2, ctx.logger);
-        } catch (err) {
-          ctx.logger.error(`b2-backup: scheduled push failed: ${String(err)}`);
-        }
+        await coordinator!.run("cron", async (signal) => {
+          const cronB2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: ctx.logger,
+            signal,
+          });
+          await push(config, ctx.stateDir, cronB2, ctx.logger);
+        });
       });
     },
 
@@ -69,12 +81,19 @@ export function createB2BackupService(config: B2BackupConfig): OpenClawPluginSer
       cron = null;
 
       // Final backup on shutdown
-      try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
-        await push(config, ctx.stateDir, b2, ctx.logger);
-      } catch (err) {
-        ctx.logger.warn(`b2-backup: shutdown push failed: ${String(err)}`);
-      }
+      coordinator ??= createPushCoordinator(ctx.logger);
+      await coordinator.run(
+        "shutdown",
+        async (signal) => {
+          const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
+            endpoint: config.endpoint,
+            logger: ctx.logger,
+            signal,
+          });
+          await push(config, ctx.stateDir, b2, ctx.logger);
+        },
+        { deadlineMs: DEFAULT_PUSH_DEADLINE_MS },
+      );
     },
   };
 }

@@ -3,10 +3,15 @@ export type B2BackupConfig = {
   applicationKey: string;
   bucket: string;
   region?: string;
+  endpoint?: string;
   prefix?: string;
   schedule?: string;
   encrypt?: boolean;
   keepSnapshots?: number;
+};
+
+export type ResolvedB2BackupConfig = B2BackupConfig & {
+  region: string;
 };
 
 export type BackupManifest = {
