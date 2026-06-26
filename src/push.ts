@@ -31,7 +31,7 @@ export async function push(
   logger: PushLogger,
   options?: PushOptions,
 ): Promise<void> {
-  const prefix = options?.prefixOverride ?? config.prefix ?? "openclaw-backup";
+  const prefix = config.prefix ?? "openclaw-backup";
   const keepSnapshots = config.keepSnapshots ?? 10;
   const shouldEncrypt = config.encrypt !== false; // default true
   const manifestCachePath = path.join(stateDir, ".b2-backup-manifest.json");
@@ -56,6 +56,7 @@ export async function push(
     // 3. Compute manifest (always on plaintext)
     const manifest = await computeManifest(files);
     const snapshotId = createSnapshotId(manifest.timestamp);
+    const snapshotRoot = options?.prefixOverride ?? `${prefix}/${snapshotId}`;
 
     // 4. Load previous manifest (skip for safety snapshots)
     let prevManifest: BackupManifest | null = null;
@@ -87,7 +88,7 @@ export async function push(
           if (!file) return;
           const fileBody = await fs.promises.readFile(file.absolutePath);
           const body = shouldEncrypt ? encrypt(fileBody, config.applicationKey) : fileBody;
-          const key = `${prefix}/${snapshotId}/${relativePath}`;
+          const key = `${snapshotRoot}/${relativePath}`;
           await b2.putObject(config.bucket, key, body, "application/octet-stream");
           logger.debug?.(`b2-backup: uploaded ${relativePath}`);
         }),
@@ -95,7 +96,7 @@ export async function push(
     }
 
     // 7. Upload manifest (always unencrypted)
-    const manifestKey = `${prefix}/${snapshotId}/manifest.json`;
+    const manifestKey = `${snapshotRoot}/manifest.json`;
     await b2.putObject(
       config.bucket,
       manifestKey,
@@ -116,7 +117,7 @@ export async function push(
       }
     }
 
-    logger.info(`b2-backup: push complete (snapshot ${snapshotId})`);
+    logger.info(`b2-backup: push complete (snapshot ${options?.prefixOverride ?? snapshotId})`);
   } finally {
     await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
   }

@@ -59,4 +59,34 @@ describe("push", () => {
 
     expect(snapshotId).toMatch(/^2026-02-19T12-00-00-000Z-[a-f0-9-]{8}$/);
   });
+
+  it("uses prefixOverride as the complete snapshot root", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    const putObject = vi.fn(async () => undefined);
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const b2 = mockB2({ putObject });
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const safetyRoot = "openclaw-backup/safety-2026-06-26T01-42-00Z";
+
+    await push(config, stateDir, b2, logger, {
+      prefixOverride: safetyRoot,
+      skipPrune: true,
+    });
+
+    const uploadedKeys = putObject.mock.calls.map((call) => call[1]);
+    const nestedUnderSafetyRoot = uploadedKeys.filter(
+      (key) => key.startsWith(`${safetyRoot}/`) && key.slice(safetyRoot.length + 1).includes("/"),
+    );
+    expect(uploadedKeys).toContain(`${safetyRoot}/openclaw.json`);
+    expect(uploadedKeys).toContain(`${safetyRoot}/manifest.json`);
+    expect(nestedUnderSafetyRoot).toEqual([]);
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
 });
