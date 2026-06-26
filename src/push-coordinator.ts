@@ -46,6 +46,9 @@ export function createPushCoordinator(
           await job(controller.signal);
           logger.debug?.(`b2-backup: push finished (${reason})`);
           return true;
+        } catch (err) {
+          logger.warn(`b2-backup: push failed (${reason}): ${String(err)}`);
+          return false;
         } finally {
           clearTimeout(timeout);
           active = null;

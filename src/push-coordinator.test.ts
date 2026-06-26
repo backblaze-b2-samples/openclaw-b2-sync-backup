@@ -31,4 +31,19 @@ describe("push coordinator", () => {
       "b2-backup: push skipped (before_compaction); another push is already running",
     );
   });
+
+  it("returns false and clears the lock when a push rejects", async () => {
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const coordinator = createPushCoordinator(logger, { deadlineMs: 5_000 });
+
+    await expect(
+      coordinator.run("cron", async () => {
+        throw new Error("upload failed");
+      }),
+    ).resolves.toBe(false);
+    await expect(coordinator.run("shutdown", async () => undefined)).resolves.toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "b2-backup: push failed (cron): Error: upload failed",
+    );
+  });
 });
