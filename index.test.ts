@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import register from "./index.js";
 
 function createMockApi(config: Record<string, unknown> = {}) {
@@ -14,11 +14,24 @@ function createMockApi(config: Record<string, unknown> = {}) {
 }
 
 describe("b2-backup plugin", () => {
+  beforeEach(() => {
+    vi.stubEnv("B2_ENDPOINT", "");
+    vi.stubEnv("B2_REGION", "");
+    vi.stubEnv("B2_KEY_ID", "");
+    vi.stubEnv("B2_APPLICATION_KEY", "");
+    vi.stubEnv("B2_BUCKET_NAME", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("registers service and gateway_stop hook when config is provided", () => {
     const api = createMockApi({
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -52,6 +65,7 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -64,6 +78,7 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -82,6 +97,7 @@ describe("b2-backup plugin", () => {
       keyId: "test-key",
       applicationKey: "test-secret",
       bucket: "test-bucket",
+      region: "test-region",
     });
 
     register.register(api as any);
@@ -98,5 +114,19 @@ describe("b2-backup plugin", () => {
     register.register(api as any);
 
     expect(api.registerTool).not.toHaveBeenCalled();
+  });
+
+  it("uses standardized B2 env vars as config fallbacks", () => {
+    vi.stubEnv("B2_ENDPOINT", "https://s3.test-region.backblazeb2.com");
+    vi.stubEnv("B2_REGION", "test-region");
+    vi.stubEnv("B2_KEY_ID", "env-key");
+    vi.stubEnv("B2_APPLICATION_KEY", "env-secret");
+    vi.stubEnv("B2_BUCKET_NAME", "env-bucket");
+    const api = createMockApi();
+
+    register.register(api as any);
+
+    expect(api.registerService).toHaveBeenCalledTimes(1);
+    expect(api.on).toHaveBeenCalledWith("gateway_stop", expect.any(Function));
   });
 });

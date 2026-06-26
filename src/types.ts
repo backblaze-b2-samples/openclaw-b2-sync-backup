@@ -2,7 +2,8 @@ export type B2BackupConfig = {
   keyId: string;
   applicationKey: string;
   bucket: string;
-  region?: string;
+  region: string;
+  endpoint?: string;
   prefix?: string;
   schedule?: string;
   encrypt?: boolean;

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { _parseListObjectsResponse as parseListObjectsResponse, _signRequest as signRequest } from "./b2-client.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  _parseListObjectsResponse as parseListObjectsResponse,
+  _signRequest as signRequest,
+  createB2Client,
+} from "./b2-client.js";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("b2-client Sig V4 signing", () => {
   // Use fixed time for deterministic test vectors
@@ -21,16 +29,16 @@ describe("b2-client Sig V4 signing", () => {
       const headers = signRequest({
         method: "GET",
         path: "/my-bucket/test-key",
-        headers: { host: "s3.us-west-004.backblazeb2.com" },
+        headers: { host: "s3.test-region.backblazeb2.com" },
         body: "",
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
 
       expect(headers.authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=/);
       expect(headers.authorization).toContain("004test");
-      expect(headers.authorization).toContain("20260219/us-west-004/s3/aws4_request");
+      expect(headers.authorization).toContain("20260219/test-region/s3/aws4_request");
       expect(headers.authorization).toContain("SignedHeaders=");
       expect(headers.authorization).toContain("Signature=");
       expect(headers["x-amz-date"]).toBe("20260219T120000Z");
@@ -58,11 +66,11 @@ describe("b2-client Sig V4 signing", () => {
         method: "PUT",
         path: "/my-bucket/upload",
         headers: {
-          host: "s3.us-west-004.backblazeb2.com",
+          host: "s3.test-region.backblazeb2.com",
           "content-type": "application/octet-stream",
         },
         body,
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
@@ -73,11 +81,11 @@ describe("b2-client Sig V4 signing", () => {
         method: "PUT",
         path: "/my-bucket/upload",
         headers: {
-          host: "s3.us-west-004.backblazeb2.com",
+          host: "s3.test-region.backblazeb2.com",
           "content-type": "application/octet-stream",
         },
         body: "",
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
@@ -106,11 +114,11 @@ describe("b2-client Sig V4 signing", () => {
         method: "GET",
         path: "/bucket/key",
         headers: {
-          host: "s3.us-west-004.backblazeb2.com",
+          host: "s3.test-region.backblazeb2.com",
           "content-type": "text/plain",
         },
         body: "",
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
@@ -143,16 +151,16 @@ describe("b2-client Sig V4 signing", () => {
         method: "GET",
         path: "/bucket/key",
         headers: {
-          host: "s3.us-west-004.backblazeb2.com",
-          "user-agent": "b2ai-openclaw",
+          host: "s3.test-region.backblazeb2.com",
+          "user-agent": "b2ai-openclaw (backblaze-b2-samples)",
         },
         body: "",
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
 
-      expect(headers["user-agent"]).toBe("b2ai-openclaw");
+      expect(headers["user-agent"]).toBe("b2ai-openclaw (backblaze-b2-samples)");
       expect(headers.authorization).toContain("user-agent");
     } finally {
       globalThis.Date = originalDate;
@@ -176,9 +184,9 @@ describe("b2-client Sig V4 signing", () => {
         method: "GET",
         path: "/bucket",
         query: { "list-type": "2", prefix: "my-prefix", "max-keys": "100" },
-        headers: { host: "s3.us-west-004.backblazeb2.com" },
+        headers: { host: "s3.test-region.backblazeb2.com" },
         body: "",
-        region: "us-west-004",
+        region: "test-region",
         accessKeyId: "004test",
         secretAccessKey: "K004secret",
       });
@@ -228,5 +236,30 @@ describe("parseListObjectsResponse", () => {
     const page = parseListObjectsResponse(xml);
     expect(page.entries).toEqual([]);
     expect(page.nextToken).toBeUndefined();
+  });
+});
+
+describe("createB2Client", () => {
+  it("adds the B2 samples user-agent to S3 requests", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    await b2.headBucket("bucket");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://s3.test-region.backblazeb2.com/bucket",
+      expect.objectContaining({
+        method: "HEAD",
+        headers: expect.objectContaining({
+          "user-agent": "b2ai-openclaw (backblaze-b2-samples)",
+        }),
+      }),
+    );
   });
 });

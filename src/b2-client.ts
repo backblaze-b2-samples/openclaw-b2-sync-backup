@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-const USER_AGENT = "b2ai-openclaw";
+const USER_AGENT = "b2ai-openclaw (backblaze-b2-samples)";
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -109,11 +109,11 @@ export { signRequest as _signRequest, parseListObjectsResponse as _parseListObje
 export async function createB2Client(
   keyId: string,
   applicationKey: string,
-  region?: string,
+  region: string,
+  endpoint?: string,
 ): Promise<B2Client> {
-  // Authorize with B2 to discover the region if not provided.
-  const resolvedRegion = region ?? (await discoverRegion(keyId, applicationKey));
-  const endpoint = `https://s3.${resolvedRegion}.backblazeb2.com`;
+  const resolvedEndpoint = resolveEndpoint(region, endpoint);
+  const endpointHost = new URL(resolvedEndpoint).host;
 
   const sign = (
     method: string,
@@ -128,7 +128,7 @@ export async function createB2Client(
       query,
       headers: { ...headers, "user-agent": USER_AGENT },
       body,
-      region: resolvedRegion,
+      region,
       accessKeyId: keyId,
       secretAccessKey: applicationKey,
     });
@@ -136,8 +136,8 @@ export async function createB2Client(
   return {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("PUT", path, { host: new URL(endpoint).host, "content-type": contentType }, body);
-      const resp = await fetch(`${endpoint}${path}`, {
+      const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
+      const resp = await fetch(`${resolvedEndpoint}${path}`, {
         method: "PUT",
         headers,
         body: new Uint8Array(body),
@@ -150,8 +150,8 @@ export async function createB2Client(
 
     async getObject(bucket, key) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("GET", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
+      const headers = sign("GET", path, { host: endpointHost });
+      const resp = await fetch(`${resolvedEndpoint}${path}`, {
         method: "GET",
         headers,
       });
@@ -176,11 +176,11 @@ export async function createB2Client(
           query["continuation-token"] = continuationToken;
         }
         const reqPath = `/${bucket}`;
-        const headers = sign("GET", reqPath, { host: new URL(endpoint).host }, "", query);
+        const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
         const qs = Object.entries(query)
           .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
           .join("&");
-        const resp = await fetch(`${endpoint}${reqPath}?${qs}`, {
+        const resp = await fetch(`${resolvedEndpoint}${reqPath}?${qs}`, {
           method: "GET",
           headers,
         });
@@ -199,8 +199,8 @@ export async function createB2Client(
 
     async deleteObject(bucket, key) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("DELETE", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
+      const headers = sign("DELETE", path, { host: endpointHost });
+      const resp = await fetch(`${resolvedEndpoint}${path}`, {
         method: "DELETE",
         headers,
       });
@@ -212,8 +212,8 @@ export async function createB2Client(
 
     async headBucket(bucket) {
       const path = `/${bucket}`;
-      const headers = sign("HEAD", path, { host: new URL(endpoint).host });
-      const resp = await fetch(`${endpoint}${path}`, {
+      const headers = sign("HEAD", path, { host: endpointHost });
+      const resp = await fetch(`${resolvedEndpoint}${path}`, {
         method: "HEAD",
         headers,
       });
@@ -224,26 +224,13 @@ export async function createB2Client(
   };
 }
 
-async function discoverRegion(keyId: string, applicationKey: string): Promise<string> {
-  const auth = Buffer.from(`${keyId}:${applicationKey}`).toString("base64");
-  const resp = await fetch("https://api.backblazeb2.com/b2api/v3/b2_authorize_account", {
-    headers: { authorization: `Basic ${auth}`, "user-agent": USER_AGENT },
-  });
-  if (!resp.ok) {
-    const text = await resp.text().catch(() => "");
-    throw new Error(`b2 authorize failed (${resp.status}): ${text}`);
-  }
-  const data = (await resp.json()) as {
-    s3ApiUrl?: string;
-    apiInfo?: { storageApi?: { s3ApiUrl?: string } };
-  };
-  // v3 nests s3ApiUrl under apiInfo.storageApi; v2 has it at top level
-  const s3ApiUrl = data.apiInfo?.storageApi?.s3ApiUrl ?? data.s3ApiUrl;
-  const match = s3ApiUrl?.match(/s3\.([^.]+)\.backblazeb2\.com/);
-  if (!match?.[1]) {
-    throw new Error("b2: could not determine region from authorize response");
-  }
-  return match[1];
+function resolveEndpoint(region: string, endpoint?: string): string {
+  const rawEndpoint = endpoint?.trim() || `https://s3.${region}.backblazeb2.com`;
+  const url = new URL(rawEndpoint);
+  url.pathname = url.pathname.replace(/\/+$/, "");
+  url.search = "";
+  url.hash = "";
+  return url.toString().replace(/\/+$/, "");
 }
 
 type ListObjectsPage = {

@@ -27,7 +27,7 @@ export function createB2BackupService(config: B2BackupConfig): OpenClawPluginSer
     id: "b2-backup",
 
     async start(ctx: OpenClawPluginServiceContext) {
-      const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+      const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
 
       // Verify bucket access
       try {
@@ -70,7 +70,7 @@ export function createB2BackupService(config: B2BackupConfig): OpenClawPluginSer
 
       // Final backup on shutdown
       try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
         await push(config, ctx.stateDir, b2, ctx.logger);
       } catch (err) {
         ctx.logger.warn(`b2-backup: shutdown push failed: ${String(err)}`);

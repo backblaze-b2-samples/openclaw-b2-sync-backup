@@ -1,4 +1,4 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createB2Client } from "./src/b2-client.js";
 import { createDebounceGate } from "./src/debounce.js";
 import { pullSnapshot } from "./src/pull.js";
@@ -7,15 +7,47 @@ import { createB2BackupService } from "./src/service.js";
 import { listSnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig } from "./src/types.js";
 
+function readEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
+}
+
+export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): B2BackupConfig | null {
+  const keyId = config?.keyId ?? readEnv("B2_KEY_ID");
+  const applicationKey = config?.applicationKey ?? readEnv("B2_APPLICATION_KEY");
+  const bucket = config?.bucket ?? readEnv("B2_BUCKET_NAME");
+  const region = config?.region ?? readEnv("B2_REGION");
+
+  if (!keyId || !applicationKey || !bucket || !region) {
+    return null;
+  }
+
+  return {
+    ...config,
+    keyId,
+    applicationKey,
+    bucket,
+    region,
+    endpoint: config?.endpoint ?? readEnv("B2_ENDPOINT"),
+  };
+}
+
+function toolText(text: string, details?: unknown) {
+  return {
+    content: [{ type: "text", text }],
+    details,
+  };
+}
+
 const plugin = {
   id: "openclaw-b2-backup",
   name: "Backblaze B2 Backup",
   description: "Sync OpenClaw state to Backblaze B2",
 
   register(api: OpenClawPluginApi) {
-    const config = api.pluginConfig as unknown as B2BackupConfig;
-    if (!config?.keyId || !config?.applicationKey || !config?.bucket) {
-      api.logger.warn("b2-backup: missing required config (keyId, applicationKey, bucket)");
+    const config = resolveB2BackupConfig(api.pluginConfig as Partial<B2BackupConfig> | undefined);
+    if (!config) {
+      api.logger.warn("b2-backup: missing required config (keyId, applicationKey, bucket, region)");
       return;
     }
 
@@ -26,7 +58,7 @@ const plugin = {
 
     api.on("gateway_stop", async () => {
       try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
         await push(config, stateDir, b2, api.logger);
       } catch (err) {
         api.logger.warn(`b2-backup: gateway_stop push failed: ${String(err)}`);
@@ -41,7 +73,7 @@ const plugin = {
         return;
       }
       try {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
         await push(config, stateDir, b2, api.logger);
       } catch (err) {
         api.logger.warn(`b2-backup: before_compaction push failed: ${String(err)}`);
@@ -66,32 +98,32 @@ const plugin = {
         },
         required: ["action"],
       },
-      async execute(params: { action: string; timestamp?: string }) {
-        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region);
+      async execute(_toolCallId: string, params: { action: string; timestamp?: string }) {
+        const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, config.endpoint);
         const prefix = config.prefix ?? "openclaw-backup";
 
         if (params.action === "list-snapshots") {
           const snapshots = await listSnapshots(b2, config.bucket, prefix);
           if (snapshots.length === 0) {
-            return { result: "No snapshots found." };
+            return toolText("No snapshots found.", { snapshots });
           }
-          return {
-            result: `Found ${snapshots.length} snapshot(s):\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`,
-            snapshots,
-          };
+          return toolText(
+            `Found ${snapshots.length} snapshot(s):\n${snapshots.map((ts) => `  - ${ts}`).join("\n")}`,
+            { snapshots },
+          );
         }
 
         if (params.action === "restore") {
           if (!params.timestamp) {
-            return { error: "timestamp is required for restore action" };
+            return toolText("timestamp is required for restore action", { error: "timestamp is required" });
           }
           await pullSnapshot(config, stateDir, b2, api.logger, params.timestamp);
-          return { result: `Restored snapshot ${params.timestamp}` };
+          return toolText(`Restored snapshot ${params.timestamp}`, { timestamp: params.timestamp });
         }
 
-        return { error: `Unknown action: ${params.action}` };
+        return toolText(`Unknown action: ${params.action}`, { error: "unknown action" });
       },
-    });
+    } as AnyAgentTool);
   },
 };
 

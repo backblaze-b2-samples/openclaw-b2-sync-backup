@@ -84,10 +84,8 @@ export async function push(
       batch.map(async (relativePath) => {
         const file = files.find((f) => f.relativePath === relativePath);
         if (!file) return;
-        let body = await fs.promises.readFile(file.absolutePath);
-        if (shouldEncrypt) {
-          body = encrypt(body, config.applicationKey);
-        }
+        const fileBody = Buffer.from(await fs.promises.readFile(file.absolutePath));
+        const body = shouldEncrypt ? encrypt(fileBody, config.applicationKey) : fileBody;
         const key = `${prefix}/${timestamp}/${relativePath}`;
         await b2.putObject(config.bucket, key, body, "application/octet-stream");
         logger.debug?.(`b2-backup: uploaded ${relativePath}`);
