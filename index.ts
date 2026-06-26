@@ -133,16 +133,25 @@ const plugin = {
             enum: ["list-snapshots", "restore"],
             description: "Action to perform",
           },
+          snapshotId: {
+            type: "string",
+            description: "Snapshot ID to restore (required for restore action)",
+          },
           timestamp: {
             type: "string",
-            description: "Snapshot timestamp to restore (required for restore action)",
+            description: "Deprecated alias for snapshotId",
           },
         },
         required: ["action"],
       },
       async execute(_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) {
         const action = typeof params.action === "string" ? params.action : "";
-        const timestamp = typeof params.timestamp === "string" ? params.timestamp : undefined;
+        const snapshotId =
+          typeof params.snapshotId === "string"
+            ? params.snapshotId
+            : typeof params.timestamp === "string"
+              ? params.timestamp
+              : undefined;
         const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
           endpoint: config.endpoint,
           logger: api.logger,
@@ -162,11 +171,11 @@ const plugin = {
         }
 
         if (action === "restore") {
-          if (!timestamp) {
-            return toolText("timestamp is required for restore action", { error: "timestamp is required" });
+          if (!snapshotId) {
+            return toolText("snapshot ID is required for restore action", { error: "snapshot ID is required" });
           }
-          await pullSnapshot(config, stateDir, b2, api.logger, timestamp);
-          return toolText(`Restored snapshot ${timestamp}`, { timestamp });
+          await pullSnapshot(config, stateDir, b2, api.logger, snapshotId);
+          return toolText(`Restored snapshot ${snapshotId}`, { snapshotId });
         }
 
         return toolText(`Unknown action: ${action}`, { error: "unknown action" });

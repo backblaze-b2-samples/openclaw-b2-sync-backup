@@ -175,6 +175,11 @@ describe("b2-backup plugin", () => {
     register.register(api as any);
 
     expect(api.registerTool).toHaveBeenCalledTimes(1);
+    const tool = api.registerTool.mock.calls[0]![0] as {
+      parameters: { properties: Record<string, { description: string }> };
+    };
+    expect(tool.parameters.properties.snapshotId?.description).toContain("Snapshot ID");
+    expect(tool.parameters.properties.timestamp?.description).toContain("Deprecated alias");
     expect(api.registerTool).toHaveBeenCalledWith(
       expect.objectContaining({
         name: "b2_rollback",
