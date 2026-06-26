@@ -13,11 +13,16 @@ function readEnv(name: string): string | undefined {
   return value ? value : undefined;
 }
 
+function readConfigString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefined): ResolvedB2BackupConfig | null {
-  const keyId = config?.keyId ?? readEnv("B2_APPLICATION_KEY_ID");
-  const applicationKey = config?.applicationKey ?? readEnv("B2_APPLICATION_KEY");
-  const bucket = config?.bucket ?? readEnv("B2_BUCKET_NAME");
-  const region = config?.region ?? readEnv("B2_REGION");
+  const keyId = readConfigString(config?.keyId) ?? readEnv("B2_APPLICATION_KEY_ID");
+  const applicationKey = readConfigString(config?.applicationKey) ?? readEnv("B2_APPLICATION_KEY");
+  const bucket = readConfigString(config?.bucket) ?? readEnv("B2_BUCKET_NAME");
+  const region = readConfigString(config?.region) ?? readEnv("B2_REGION");
 
   if (!keyId || !applicationKey || !bucket || !region) {
     return null;
@@ -29,7 +34,7 @@ export function resolveB2BackupConfig(config: Partial<B2BackupConfig> | undefine
     applicationKey,
     bucket,
     region,
-    endpoint: config?.endpoint ?? readEnv("B2_ENDPOINT"),
+    endpoint: readConfigString(config?.endpoint) ?? readEnv("B2_ENDPOINT"),
   };
 }
 

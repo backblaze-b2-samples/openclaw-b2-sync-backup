@@ -123,7 +123,7 @@ export async function push(
 }
 
 function createSnapshotId(timestamp: string): string {
-  const safeTimestamp = timestamp.replace(/[:.]/g, "-").replace(/Z$/, "Z");
+  const safeTimestamp = timestamp.replace(/[:.]/g, "-");
   return `${safeTimestamp}-${crypto.randomUUID().slice(0, 8)}`;
 }
 

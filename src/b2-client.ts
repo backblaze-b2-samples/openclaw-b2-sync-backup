@@ -426,6 +426,11 @@ async function waitBeforeRetry(
   status: string,
   elapsedMs: number,
 ): Promise<void> {
+  if (options.signal?.aborted) {
+    throw options.signal.reason instanceof Error
+      ? options.signal.reason
+      : new Error("b2 request aborted");
+  }
   const delayMs = retryDelayMs(options, attempt);
   options.logger?.warn?.(
     `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,

@@ -72,6 +72,22 @@ describe("b2-backup plugin", () => {
     expect(api.registerTool).not.toHaveBeenCalled();
   });
 
+  it("treats whitespace plugin config values as missing", () => {
+    const api = createMockApi({
+      keyId: "   ",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+    });
+
+    register.register(api as any);
+
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("missing required config"),
+    );
+    expect(api.registerService).not.toHaveBeenCalled();
+  });
+
   it("exports correct plugin metadata", () => {
     expect(register.id).toBe("openclaw-b2-backup");
     expect(register.name).toBe("Backblaze B2 Backup");

@@ -297,6 +297,26 @@ describe("createB2Client", () => {
       expect.stringContaining("retrying bucket=bucket attempt=1/2 status=503"),
     );
   });
+
+  it("does not sleep before retry when parent signal is aborted", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => {
+      controller.abort(new Error("deadline"));
+      return new Response("try again", { status: 503 });
+    });
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      signal: controller.signal,
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterMs: 0,
+      sleep,
+    });
+
+    await expect(b2.headBucket("bucket")).rejects.toThrow("deadline");
+    expect(sleep).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveEndpoint", () => {
