@@ -3,6 +3,8 @@ import {
   _parseListObjectsResponse as parseListObjectsResponse,
   _resolveEndpoint as resolveEndpoint,
   _signRequest as signRequest,
+  B2ConfigError,
+  B2RequestError,
   createB2Client,
 } from "./b2-client.js";
 
@@ -275,6 +277,7 @@ describe("parseListObjectsResponse", () => {
 
 describe("createB2Client", () => {
   it("rejects missing region before network requests", async () => {
+    await expect(createB2Client("004test", "K004secret")).rejects.toThrow(B2ConfigError);
     await expect(createB2Client("004test", "K004secret")).rejects.toThrow(
       "region is required",
     );
@@ -287,8 +290,19 @@ describe("createB2Client", () => {
     ["retryJitterMs", { retryJitterMs: -1 }],
   ])("rejects invalid %s option", async (name, options) => {
     await expect(createB2Client("004test", "K004secret", "test-region", options)).rejects.toThrow(
+      B2ConfigError,
+    );
+    await expect(createB2Client("004test", "K004secret", "test-region", options)).rejects.toThrow(
       `b2: ${name}`,
     );
+  });
+
+  it("rejects invalid endpoint options with a typed config error", async () => {
+    await expect(
+      createB2Client("004test", "K004secret", "test-region", {
+        endpoint: "https://example.com",
+      }),
+    ).rejects.toThrow(B2ConfigError);
   });
 
   it("adds the B2 samples user-agent to S3 requests", async () => {
@@ -312,6 +326,26 @@ describe("createB2Client", () => {
         }),
       }),
     );
+  });
+
+  it("throws structured request errors with S3 error codes", async () => {
+    const body = "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 404 })));
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    await expect(b2.deleteObject("bucket", "missing.txt")).rejects.toMatchObject({
+      name: "B2RequestError",
+      operation: "deleteObject",
+      status: 404,
+      body,
+      code: "NoSuchKey",
+    });
+    await expect(b2.deleteObject("bucket", "missing.txt")).rejects.toThrow(B2RequestError);
   });
 
   it("retries transient B2 responses with attempt logging", async () => {
@@ -393,6 +427,9 @@ describe("resolveEndpoint", () => {
 
   it("rejects invalid endpoint URLs with a clear config error", () => {
     expect(() => resolveEndpoint("test-region", "s3.test-region.backblazeb2.com")).toThrow(
+      B2ConfigError,
+    );
+    expect(() => resolveEndpoint("test-region", "s3.test-region.backblazeb2.com")).toThrow(
       "b2: endpoint must be a valid URL",
     );
   });
@@ -406,6 +443,6 @@ describe("resolveEndpoint", () => {
     ["non-B2 endpoint", "https://example.com"],
     ["wrong-region endpoint", "https://s3.other-region.backblazeb2.com"],
   ])("rejects %s", (_label, endpoint) => {
-    expect(() => resolveEndpoint("test-region", endpoint)).toThrow();
+    expect(() => resolveEndpoint("test-region", endpoint)).toThrow(B2ConfigError);
   });
 });

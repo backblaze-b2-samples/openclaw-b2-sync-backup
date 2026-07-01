@@ -17,6 +17,10 @@ type PushLogger = {
   debug?: (msg: string) => void;
 };
 
+const PUSH_LOCK_DIRNAME = ".b2-backup-push.lock";
+const PUSH_LOCK_OWNER_FILENAME = "owner.json";
+const STALE_OWNERLESS_LOCK_GRACE_MS = 30_000;
+
 export type PushOptions = {
   /** Override the complete snapshot root (used for safety snapshots). */
   prefixOverride?: string;
@@ -24,7 +28,38 @@ export type PushOptions = {
   skipPrune?: boolean;
 };
 
+export class PushLockError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PushLockError";
+  }
+}
+
 export async function push(
+  config: B2BackupConfig,
+  stateDir: string,
+  b2: B2Client,
+  logger: PushLogger,
+  options?: PushOptions,
+): Promise<void> {
+  const lock = await acquirePushLock(stateDir);
+  let pushError: unknown;
+  try {
+    await pushWithLock(config, stateDir, b2, logger, options);
+  } catch (err) {
+    pushError = err;
+    throw err;
+  } finally {
+    try {
+      await lock.release();
+    } catch (err) {
+      logger.warn(`b2-backup: failed to release push lock: ${String(err)}`);
+      if (!pushError) throw err;
+    }
+  }
+}
+
+async function pushWithLock(
   config: B2BackupConfig,
   stateDir: string,
   b2: B2Client,
@@ -146,3 +181,97 @@ function createSnapshotId(timestamp: string): string {
 }
 
 export { createSnapshotId as _createSnapshotId };
+
+async function acquirePushLock(stateDir: string): Promise<{ release: () => Promise<void> }> {
+  const lockDir = path.join(stateDir, PUSH_LOCK_DIRNAME);
+  await fs.promises.mkdir(stateDir, { recursive: true });
+
+  if (!(await tryCreateLockDir(lockDir))) {
+    const removedStaleLock = await removeDeadProcessLock(lockDir);
+    if (!removedStaleLock || !(await tryCreateLockDir(lockDir))) {
+      throw new PushLockError(`another push is already running (lock: ${lockDir})`);
+    }
+  }
+
+  try {
+    await writeLockOwner(lockDir);
+  } catch (err) {
+    await fs.promises.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
+
+  return {
+    async release() {
+      await fs.promises.rm(lockDir, { recursive: true, force: true });
+    },
+  };
+}
+
+async function tryCreateLockDir(lockDir: string): Promise<boolean> {
+  try {
+    await fs.promises.mkdir(lockDir);
+    return true;
+  } catch (err) {
+    if (isNodeError(err, "EEXIST")) return false;
+    throw err;
+  }
+}
+
+async function writeLockOwner(lockDir: string): Promise<void> {
+  const owner = {
+    pid: process.pid,
+    startedAt: new Date().toISOString(),
+  };
+  await fs.promises.writeFile(
+    path.join(lockDir, PUSH_LOCK_OWNER_FILENAME),
+    JSON.stringify(owner, null, 2),
+    "utf8",
+  );
+}
+
+async function removeDeadProcessLock(lockDir: string): Promise<boolean> {
+  const ownerPath = path.join(lockDir, PUSH_LOCK_OWNER_FILENAME);
+  let owner: { pid?: unknown };
+  try {
+    owner = JSON.parse(await fs.promises.readFile(ownerPath, "utf8")) as { pid?: unknown };
+  } catch {
+    return removeAgedOwnerlessLock(lockDir);
+  }
+
+  if (typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
+    return removeAgedOwnerlessLock(lockDir);
+  }
+  if (isProcessRunning(owner.pid)) return false;
+
+  await fs.promises.rm(lockDir, { recursive: true, force: true });
+  return true;
+}
+
+async function removeAgedOwnerlessLock(lockDir: string): Promise<boolean> {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(lockDir);
+  } catch {
+    return false;
+  }
+
+  if (Date.now() - stat.mtimeMs < STALE_OWNERLESS_LOCK_GRACE_MS) {
+    return false;
+  }
+
+  await fs.promises.rm(lockDir, { recursive: true, force: true });
+  return true;
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return !isNodeError(err, "ESRCH");
+  }
+}
+
+function isNodeError(err: unknown, code: string): boolean {
+  return err instanceof Error && "code" in err && err.code === code;
+}

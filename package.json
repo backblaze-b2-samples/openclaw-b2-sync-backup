@@ -5,6 +5,9 @@
   "type": "module",
   "main": "dist/index.mjs",
   "types": "dist/index.d.mts",
+  "bin": {
+    "openclaw-b2-backup-push": "dist/src/cli.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.mts",
@@ -16,7 +19,7 @@
     "openclaw.plugin.json"
   ],
   "scripts": {
-    "build": "tsdown src/index.ts index.ts --format esm --dts --out-dir dist",
+    "build": "tsdown src/index.ts index.ts src/cli.ts --format esm --dts --out-dir dist",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -24,7 +27,8 @@
     "sync-to-monorepo": "./scripts/sync.sh push"
   },
   "dependencies": {
-    "croner": "^10.0.0"
+    "croner": "^10.0.0",
+    "json5": "^2.2.3"
   },
   "peerDependencies": {
     "openclaw": ">=2026.0.0"
