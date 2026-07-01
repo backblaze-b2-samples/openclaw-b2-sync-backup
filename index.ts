@@ -9,6 +9,7 @@ import { createB2BackupService } from "./src/service.js";
 import { listRegularSnapshots, listSafetySnapshots } from "./src/snapshots.js";
 import type { B2BackupConfig } from "./src/types.js";
 
+export * from "./src/index.js";
 export { resolveB2BackupConfig } from "./src/config.js";
 
 function toolText(text: string, details?: unknown) {

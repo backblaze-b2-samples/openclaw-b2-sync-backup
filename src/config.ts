@@ -252,7 +252,13 @@ function resolveHomeDir(env: Env, cwd: string, homedir: () => string): string {
 
 function isPathInside(childPath: string, parentPath: string): boolean {
   const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
-  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!!relative &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
 }
 
 function errorMessage(err: unknown): string {

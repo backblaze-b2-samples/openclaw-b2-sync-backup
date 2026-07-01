@@ -125,7 +125,7 @@ Exit codes:
 | `0` | Push or dry-run succeeded |
 | `1` | B2 auth/check/upload failed |
 | `64` | CLI usage error |
-| `65` | Config file or plugin config is malformed |
+| `65` | Config file, plugin config, or state directory is invalid |
 
 Options:
 
@@ -318,7 +318,7 @@ openclaw plugins list  # should show openclaw-b2-backup
 pnpm test
 ```
 
-145 tests across 11 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
+147 tests across 11 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
 
 ## License
 

@@ -140,4 +140,16 @@ describe("OpenClaw B2 config extraction", () => {
       stateDir: "/var/lib/openclaw",
     });
   });
+
+  it("allows child config paths whose first segment starts with dots", () => {
+    expect(
+      resolveOpenClawConfigPaths({
+        configPath: "/home/me/.openclaw/..foo/openclaw.json",
+        env: { HOME: "/home/me" },
+      }),
+    ).toEqual({
+      configPath: "/home/me/.openclaw/..foo/openclaw.json",
+      stateDir: "/home/me/.openclaw",
+    });
+  });
 });

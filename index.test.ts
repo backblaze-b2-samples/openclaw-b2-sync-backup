@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import register, { resolveB2BackupConfig } from "./index.js";
+import register, { B2RequestError, PushLockError, resolveB2BackupConfig } from "./index.js";
 
 function createMockApi(config: Record<string, unknown> = {}) {
   return {
@@ -149,6 +149,11 @@ describe("b2-backup plugin", () => {
   it("exports correct plugin metadata", () => {
     expect(register.id).toBe("openclaw-b2-backup");
     expect(register.name).toBe("Backblaze B2 Backup");
+  });
+
+  it("exports typed errors from the package entrypoint", () => {
+    expect(new B2RequestError("deleteObject", 404, "", "NoSuchKey")).toBeInstanceOf(Error);
+    expect(new PushLockError("locked")).toBeInstanceOf(Error);
   });
 
   it("registers before_compaction hook", () => {
