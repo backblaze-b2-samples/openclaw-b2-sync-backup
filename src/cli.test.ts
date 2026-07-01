@@ -424,6 +424,40 @@ describe("openclaw-b2-backup-push CLI", () => {
     expect(gatherFiles).not.toHaveBeenCalled();
   });
 
+  it("still requires a readable state directory when empty state is allowed", async () => {
+    const configDir = await makeStateDir();
+    const stateDir = path.join(configDir, "missing-state");
+    createdDirs.push(configDir);
+    const configPath = await writeConfig(configDir, {
+      plugins: {
+        entries: {
+          "openclaw-b2-backup": {
+            config: {
+              keyId: "key-id",
+              applicationKey: "app-key",
+              bucket: "bucket-name",
+              region: "us-west-004",
+            },
+          },
+        },
+      },
+    });
+    const createB2 = vi.fn(async () => createMockB2());
+
+    const result = await runCli(
+      configArgs(configPath, stateDir, "--allow-empty-state", "--json"),
+      { createB2Client: createB2 },
+    );
+
+    expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
+    expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
+      ok: false,
+      code: "config_malformed",
+      error: expect.stringContaining(`cannot read state directory ${stateDir}`),
+    });
+    expect(createB2).not.toHaveBeenCalled();
+  });
+
   it("returns config malformed when required config is missing", async () => {
     const stateDir = await makeStateDir();
     createdDirs.push(stateDir);

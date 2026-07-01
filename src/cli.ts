@@ -243,8 +243,8 @@ async function validateSyncableState(
   options: CliOptions,
   collectFiles: typeof gatherFiles,
 ): Promise<void> {
-  if (options.allowEmptyState) return;
   await assertReadableStateDirectory(stateDir);
+  if (options.allowEmptyState) return;
   const files = await collectFiles(stateDir);
   if (files.length > 0) return;
   throw new B2BackupConfigError(
