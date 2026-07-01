@@ -87,6 +87,28 @@ describe("OpenClaw B2 config extraction", () => {
     ).toThrow(B2BackupConfigError);
   });
 
+  it("throws typed errors for malformed modern plugin entries", () => {
+    expect(() =>
+      extractB2BackupPluginConfig({
+        plugins: {
+          entries: {
+            "openclaw-b2-backup": "bad",
+          },
+        },
+      }),
+    ).toThrow("plugins.entries.openclaw-b2-backup must be an object");
+  });
+
+  it("throws typed errors for malformed legacy plugin entries", () => {
+    expect(() =>
+      extractB2BackupPluginConfig({
+        plugins: {
+          "openclaw-b2-backup": "bad",
+        },
+      }),
+    ).toThrow("plugins.openclaw-b2-backup must be an object");
+  });
+
   it("parses JSON5 OpenClaw config files", () => {
     expect(
       parseOpenClawConfig(`{

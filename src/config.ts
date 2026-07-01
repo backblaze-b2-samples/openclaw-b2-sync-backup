@@ -176,10 +176,18 @@ export function extractB2BackupPluginConfig(
     throw new B2BackupConfigError("config root must be a JSON object");
   }
 
-  const modernEntry = getRecord(rawConfig, ["plugins", "entries", PLUGIN_ID]);
+  const modernEntry = getOptionalRecordAtPath(
+    rawConfig,
+    ["plugins", "entries", PLUGIN_ID],
+    `plugins.entries.${PLUGIN_ID}`,
+  );
   if (modernEntry) return readEntryConfig(modernEntry, `plugins.entries.${PLUGIN_ID}`);
 
-  const legacyPluginsEntry = getRecord(rawConfig, ["plugins", PLUGIN_ID]);
+  const legacyPluginsEntry = getOptionalRecordAtPath(
+    rawConfig,
+    ["plugins", PLUGIN_ID],
+    `plugins.${PLUGIN_ID}`,
+  );
   if (legacyPluginsEntry) return readEntryConfig(legacyPluginsEntry, `plugins.${PLUGIN_ID}`);
 
   const topLevelEntry = rawConfig[PLUGIN_ID];
@@ -206,13 +214,25 @@ function readEntryConfig(
   return entry as Partial<B2BackupConfig>;
 }
 
-function getRecord(root: Record<string, unknown>, keys: string[]): Record<string, unknown> | null {
+function getOptionalRecordAtPath(
+  root: Record<string, unknown>,
+  keys: string[],
+  pathLabel: string,
+): Record<string, unknown> | undefined {
   let cursor: unknown = root;
+  const pathParts: string[] = [];
   for (const key of keys) {
-    if (!isRecord(cursor)) return null;
+    if (!isRecord(cursor)) {
+      throw new B2BackupConfigError(`${pathParts.join(".")} must be an object`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(cursor, key)) return undefined;
     cursor = cursor[key];
+    pathParts.push(key);
   }
-  return isRecord(cursor) ? cursor : null;
+  if (!isRecord(cursor)) {
+    throw new B2BackupConfigError(`${pathLabel} must be an object`);
+  }
+  return cursor;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
