@@ -388,9 +388,20 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   return result.exitCode;
 }
 
-function isDirectRun(): boolean {
-  if (!process.argv[1]) return false;
-  return path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+function realPath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+export function isDirectRun(
+  argvPath = process.argv[1],
+  modulePath = fileURLToPath(import.meta.url),
+): boolean {
+  if (!argvPath) return false;
+  return realPath(argvPath) === realPath(modulePath);
 }
 
 if (isDirectRun()) {

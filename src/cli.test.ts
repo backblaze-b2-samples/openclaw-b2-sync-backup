@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { EXIT_CODES, parseArgs, runCli } from "./cli.js";
+import { EXIT_CODES, isDirectRun, parseArgs, runCli } from "./cli.js";
 import type { B2Client } from "./b2-client.js";
 import type { CliJsonFailure, CliJsonOutput, CliJsonSuccess } from "./cli.js";
 
@@ -77,6 +77,20 @@ describe("openclaw-b2-backup-push CLI", () => {
 
     expect(result.exitCode).toBe(EXIT_CODES.usage);
     expect(result.stderr).toContain("unknown option");
+  });
+
+  it("recognizes symlinked package-manager bin paths as direct runs", () => {
+    const symlinkPath = path.join(os.tmpdir(), "node_modules", ".bin", "openclaw-b2-backup-push");
+    const modulePath = path.join(os.tmpdir(), "package", "dist", "src", "cli.mjs");
+    const realpathSync = vi.spyOn(fs, "realpathSync").mockImplementation((filePath) => {
+      const value = String(filePath);
+      if (value === symlinkPath || value === modulePath) return modulePath;
+      return path.resolve(value);
+    });
+
+    expect(isDirectRun(symlinkPath, modulePath)).toBe(true);
+    expect(realpathSync).toHaveBeenCalledWith(symlinkPath);
+    expect(realpathSync).toHaveBeenCalledWith(modulePath);
   });
 
   it("honors json output for usage errors after the failing option", async () => {
