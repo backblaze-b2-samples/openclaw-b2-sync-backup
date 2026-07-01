@@ -94,6 +94,13 @@ describe("openclaw-b2-backup-push CLI", () => {
     expect(result.stderr).toContain("unknown option");
   });
 
+  it("includes supported flags in the usage synopsis", async () => {
+    const result = await runCli(["--help"]);
+
+    expect(result.exitCode).toBe(EXIT_CODES.success);
+    expect(result.stdout).toContain("[--allow-empty-state]");
+  });
+
   it("recognizes symlinked package-manager bin paths as direct runs", () => {
     const symlinkPath = path.join(os.tmpdir(), "node_modules", ".bin", "openclaw-b2-backup-push");
     const modulePath = path.join(os.tmpdir(), "package", "dist", "src", "cli.mjs");

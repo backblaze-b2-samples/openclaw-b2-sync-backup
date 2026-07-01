@@ -92,7 +92,7 @@ const defaultOptions = (): CliOptions => ({
 
 function usage(): string {
   return [
-    "Usage: openclaw-b2-backup-push [--config <path>] [--state-dir <path>] [--dry-run] [--json] [--quiet]",
+    "Usage: openclaw-b2-backup-push [--config <path>] [--state-dir <path>] [--dry-run] [--allow-empty-state] [--json] [--quiet]",
     "",
     "Options:",
     "  --config <path>  OpenClaw config path (defaults to ~/.openclaw/openclaw.json)",
