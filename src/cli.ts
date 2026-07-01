@@ -3,13 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createB2Client } from "./b2-client.js";
-import { resolveB2BackupConfig } from "./config.js";
+import { B2ConfigError, createB2Client } from "./b2-client.js";
+import { B2BackupConfigError, resolveB2BackupConfigFromOpenClawConfig } from "./config.js";
 import { push } from "./push.js";
 import type { B2Client } from "./b2-client.js";
-import type { B2BackupConfig, ResolvedB2BackupConfig } from "./types.js";
+import type { ResolvedB2BackupConfig } from "./types.js";
 
-const PLUGIN_ID = "openclaw-b2-backup";
 const CONFIG_FILENAME = "openclaw.json";
 const DEFAULT_PREFIX = "openclaw-backup";
 
@@ -49,6 +48,7 @@ type CliDeps = {
   readFile?: (filePath: string, encoding: BufferEncoding) => Promise<string>;
   createB2Client?: typeof createB2Client;
   push?: typeof push;
+  writeStderr?: (chunk: string) => void;
 };
 
 export type CliResult = {
@@ -56,6 +56,25 @@ export type CliResult = {
   stdout: string;
   stderr: string;
 };
+
+export type CliFailureCode = "usage" | "config_malformed" | "push_failure";
+
+export type CliJsonSuccess = {
+  ok: true;
+  mode: "push" | "dry-run";
+  configPath: string;
+  stateDir: string;
+  bucket: string;
+  prefix: string;
+};
+
+export type CliJsonFailure = {
+  ok: false;
+  code: CliFailureCode;
+  error: string;
+};
+
+export type CliJsonOutput = CliJsonSuccess | CliJsonFailure;
 
 type ParsedArgs =
   | { ok: true; options: CliOptions }
@@ -149,7 +168,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
   }
 
   const stderr: string[] = [];
-  const logger = createLogger(options, stderr);
+  const logger = createLogger(options, stderr, deps.writeStderr);
 
   try {
     const context = await loadCliContext(options, deps);
@@ -174,7 +193,11 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
     return success(options, context, "push", stderr);
   } catch (err) {
     const message = errorMessage(err);
-    if (err instanceof ConfigError || isB2ConfigError(message)) {
+    if (
+      err instanceof ConfigError ||
+      err instanceof B2BackupConfigError ||
+      err instanceof B2ConfigError
+    ) {
       return failure(options, EXIT_CODES.configMalformed, "config_malformed", message, stderr);
     }
     return failure(options, EXIT_CODES.pushFailure, "push_failure", message, stderr);
@@ -203,14 +226,7 @@ async function loadCliContext(options: CliOptions, deps: CliDeps): Promise<CliCo
     throw new ConfigError(`config ${configPath} is not valid JSON: ${errorMessage(err)}`);
   }
 
-  const pluginConfig = extractPluginConfig(rawConfig);
-  const config = resolveB2BackupConfig(pluginConfig, env);
-  if (!config) {
-    throw new ConfigError(
-      "missing required config (keyId, applicationKey, bucket, region). " +
-        "Set them in plugins.entries.openclaw-b2-backup.config or B2_* environment variables.",
-    );
-  }
+  const config = resolveB2BackupConfigFromOpenClawConfig(rawConfig, env);
 
   return { config, configPath, stateDir };
 }
@@ -261,7 +277,9 @@ function resolveUserPath(input: string, env: Env, cwd: string, homedir: () => st
 
 function resolveHomeDir(env: Env, cwd: string, homedir: () => string): string {
   const openclawHome = env.OPENCLAW_HOME?.trim();
-  if (openclawHome) return resolveUserPath(openclawHome, { ...env, OPENCLAW_HOME: undefined }, cwd, homedir);
+  if (openclawHome) {
+    return resolveUserPath(openclawHome, { ...env, OPENCLAW_HOME: undefined }, cwd, homedir);
+  }
   const envHome = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (envHome) return path.resolve(envHome);
   try {
@@ -271,57 +289,19 @@ function resolveHomeDir(env: Env, cwd: string, homedir: () => string): string {
   }
 }
 
-function extractPluginConfig(rawConfig: unknown): Partial<B2BackupConfig> | undefined {
-  if (!isRecord(rawConfig)) {
-    throw new ConfigError("config root must be a JSON object");
-  }
-
-  const modernEntry = getRecord(rawConfig, ["plugins", "entries", PLUGIN_ID]);
-  if (modernEntry) return readEntryConfig(modernEntry, `plugins.entries.${PLUGIN_ID}`);
-
-  const legacyPluginsEntry = getRecord(rawConfig, ["plugins", PLUGIN_ID]);
-  if (legacyPluginsEntry) return readEntryConfig(legacyPluginsEntry, `plugins.${PLUGIN_ID}`);
-
-  const topLevelEntry = rawConfig[PLUGIN_ID];
-  if (topLevelEntry !== undefined) {
-    if (!isRecord(topLevelEntry)) {
-      throw new ConfigError(`${PLUGIN_ID} must be an object`);
-    }
-    return readEntryConfig(topLevelEntry, PLUGIN_ID);
-  }
-
-  return undefined;
-}
-
-function readEntryConfig(
-  entry: Record<string, unknown>,
-  pathLabel: string,
-): Partial<B2BackupConfig> | undefined {
-  if (Object.prototype.hasOwnProperty.call(entry, "config")) {
-    if (!isRecord(entry.config)) {
-      throw new ConfigError(`${pathLabel}.config must be an object`);
-    }
-    return entry.config as Partial<B2BackupConfig>;
-  }
-  return entry as Partial<B2BackupConfig>;
-}
-
-function getRecord(root: Record<string, unknown>, keys: string[]): Record<string, unknown> | null {
-  let cursor: unknown = root;
-  for (const key of keys) {
-    if (!isRecord(cursor)) return null;
-    cursor = cursor[key];
-  }
-  return isRecord(cursor) ? cursor : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function createLogger(options: CliOptions, stderr: string[]): CliLogger {
+function createLogger(
+  options: CliOptions,
+  stderr: string[],
+  writeStderr?: (chunk: string) => void,
+): CliLogger {
   const write = (msg: string) => {
-    if (!options.quiet && !options.json) stderr.push(`${msg}\n`);
+    if (options.quiet || options.json) return;
+    const chunk = `${msg}\n`;
+    if (writeStderr) {
+      writeStderr(chunk);
+    } else {
+      stderr.push(chunk);
+    }
   };
   return {
     info: write,
@@ -336,7 +316,7 @@ function success(
   mode: "push" | "dry-run",
   stderr: string[],
 ): CliResult {
-  const body = {
+  const body: CliJsonSuccess = {
     ok: true,
     mode,
     configPath: context.configPath,
@@ -367,19 +347,21 @@ function success(
 function failure(
   options: CliOptions,
   exitCode: number,
-  code: "usage" | "config_malformed" | "push_failure",
+  code: CliFailureCode,
   message: string,
   stderr: string[] = [],
 ): CliResult {
   if (options.json) {
+    const body: CliJsonFailure = { ok: false, code, error: message };
     return {
       exitCode,
-      stdout: `${JSON.stringify({ ok: false, code, error: message })}\n`,
+      stdout: `${JSON.stringify(body)}\n`,
       stderr: stderr.join(""),
     };
   }
+  const diagnostic = `b2-backup: ${message}\n`;
   if (options.quiet) {
-    return { exitCode, stdout: "", stderr: stderr.join("") };
+    return { exitCode, stdout: "", stderr: `${stderr.join("")}${diagnostic}` };
   }
 
   const suffix = code === "usage" ? `\n\n${usage()}` : "";
@@ -390,16 +372,12 @@ function failure(
   };
 }
 
-function isB2ConfigError(message: string): boolean {
-  return message.startsWith("b2: endpoint ") || message.includes("region is required");
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<number> {
-  const result = await runCli(argv);
+  const result = await runCli(argv, { writeStderr: (chunk) => process.stderr.write(chunk) });
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   process.exitCode = result.exitCode;

@@ -41,6 +41,13 @@ export type B2ClientOptions = {
   sleep?: (ms: number) => Promise<void>;
 };
 
+export class B2ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "B2ConfigError";
+  }
+}
+
 type NormalizedB2ClientOptions = Required<
   Pick<B2ClientOptions, "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryJitterMs">
 > &
@@ -376,7 +383,7 @@ function normalizeClientOptions(
 function positiveNumber(value: number | undefined, fallback: number, name: string): number {
   const resolved = value ?? fallback;
   if (!Number.isFinite(resolved) || resolved <= 0) {
-    throw new Error(`b2: ${name} must be a positive finite number`);
+    throw new B2ConfigError(`b2: ${name} must be a positive finite number`);
   }
   return resolved;
 }
@@ -384,7 +391,7 @@ function positiveNumber(value: number | undefined, fallback: number, name: strin
 function nonNegativeNumber(value: number | undefined, fallback: number, name: string): number {
   const resolved = value ?? fallback;
   if (!Number.isFinite(resolved) || resolved < 0) {
-    throw new Error(`b2: ${name} must be a non-negative finite number`);
+    throw new B2ConfigError(`b2: ${name} must be a non-negative finite number`);
   }
   return resolved;
 }
@@ -392,7 +399,7 @@ function nonNegativeNumber(value: number | undefined, fallback: number, name: st
 function nonNegativeInteger(value: number | undefined, fallback: number, name: string): number {
   const resolved = value ?? fallback;
   if (!Number.isInteger(resolved) || resolved < 0) {
-    throw new Error(`b2: ${name} must be a non-negative finite integer`);
+    throw new B2ConfigError(`b2: ${name} must be a non-negative finite integer`);
   }
   return resolved;
 }
@@ -400,7 +407,7 @@ function nonNegativeInteger(value: number | undefined, fallback: number, name: s
 function resolveRegion(region: string | undefined): string {
   const resolvedRegion = region?.trim().toLowerCase();
   if (!resolvedRegion) {
-    throw new Error(
+    throw new B2ConfigError(
       "b2: region is required; set region in plugin config or B2_REGION. " +
         "Native B2 region discovery was removed so storage requests stay on the S3-compatible API.",
     );
@@ -415,23 +422,23 @@ function resolveEndpoint(region: string, endpoint?: string): string {
   try {
     url = new URL(rawEndpoint);
   } catch {
-    throw new Error("b2: endpoint must be a valid URL");
+    throw new B2ConfigError("b2: endpoint must be a valid URL");
   }
 
   if (url.protocol !== "https:") {
-    throw new Error("b2: endpoint must use https");
+    throw new B2ConfigError("b2: endpoint must use https");
   }
   if (url.username || url.password) {
-    throw new Error("b2: endpoint must not contain credentials");
+    throw new B2ConfigError("b2: endpoint must not contain credentials");
   }
   if (url.hostname !== expectedHost) {
-    throw new Error(`b2: endpoint host must be ${expectedHost}`);
+    throw new B2ConfigError(`b2: endpoint host must be ${expectedHost}`);
   }
   if (url.port) {
-    throw new Error("b2: endpoint must not include a custom port");
+    throw new B2ConfigError("b2: endpoint must not include a custom port");
   }
   if (url.pathname && url.pathname !== "/") {
-    throw new Error("b2: endpoint must not include a path");
+    throw new B2ConfigError("b2: endpoint must not include a path");
   }
 
   url.pathname = "";

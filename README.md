@@ -133,7 +133,21 @@ Options:
 |--------|----------|
 | `--dry-run` | Auth-checks bucket access with no upload |
 | `--json` | Emits machine-readable JSON |
-| `--quiet` | Suppresses human-readable success and progress output |
+| `--quiet` | Suppresses human-readable success and progress output; failures still print one stderr diagnostic |
+
+JSON output is a stable CLI contract:
+
+```json
+{"ok":true,"mode":"push","configPath":"/home/me/.openclaw/openclaw.json","stateDir":"/home/me/.openclaw","bucket":"my-openclaw-backups","prefix":"openclaw-backup"}
+```
+
+`mode` is `push` or `dry-run`. Failure output uses:
+
+```json
+{"ok":false,"code":"push_failure","error":"upload failed"}
+```
+
+`code` is `usage`, `config_malformed`, or `push_failure`.
 
 ## What Gets Synced
 
@@ -302,7 +316,7 @@ openclaw plugins list  # should show openclaw-b2-backup
 pnpm test
 ```
 
-119 tests across 10 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
+128 tests across 11 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
 
 ## License
 

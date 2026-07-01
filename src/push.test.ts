@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { B2Client } from "./b2-client.js";
-import { _createSnapshotId as createSnapshotId, push } from "./push.js";
+import { _createSnapshotId as createSnapshotId, PushLockError, push } from "./push.js";
 import type { ResolvedB2BackupConfig } from "./types.js";
 
 function mockB2(overrides: Partial<B2Client> = {}): B2Client {
@@ -15,6 +15,16 @@ function mockB2(overrides: Partial<B2Client> = {}): B2Client {
     headBucket: vi.fn(async () => undefined),
     ...overrides,
   };
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void } {
+  let resolve!: () => void;
+  let reject!: (err: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("push", () => {
@@ -50,8 +60,42 @@ describe("push", () => {
     await expect(push(config, stateDir, b2, logger)).rejects.toThrow("upload failed");
 
     expect(await fs.promises.readdir(tempRoot)).toEqual([]);
+    await expect(
+      fs.promises.access(path.join(stateDir, ".b2-backup-push.lock")),
+    ).rejects.toThrow();
     await fs.promises.rm(stateDir, { recursive: true, force: true });
     await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  it("rejects overlapping pushes with a lock diagnostic", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const uploadStarted = deferred();
+    const releaseUpload = deferred();
+    const putObject = vi.fn(async () => {
+      uploadStarted.resolve();
+      await releaseUpload.promise;
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+
+    const firstPush = push(config, stateDir, mockB2({ putObject }), logger);
+    await uploadStarted.promise;
+
+    await expect(push(config, stateDir, mockB2(), logger)).rejects.toThrow(PushLockError);
+    await expect(push(config, stateDir, mockB2(), logger)).rejects.toThrow(
+      "another push is already running",
+    );
+
+    releaseUpload.resolve();
+    await firstPush;
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
   });
 
   it("adds a random suffix to snapshot IDs", () => {
