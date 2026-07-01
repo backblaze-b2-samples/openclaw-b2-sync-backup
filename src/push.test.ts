@@ -191,6 +191,70 @@ describe("push", () => {
     await fs.promises.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("fails a successful push when releasing the lock fails", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const lockDir = path.join(stateDir, ".b2-backup-push.lock");
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const b2 = mockB2();
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const rm = fs.promises.rm.bind(fs.promises);
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(lockDir)) {
+        throw new Error("release failed");
+      }
+      return rm(target, options);
+    });
+
+    await expect(push(config, stateDir, b2, logger)).rejects.toThrow("release failed");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to release push lock"),
+    );
+
+    rmSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("preserves the push error when lock release also fails", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const lockDir = path.join(stateDir, ".b2-backup-push.lock");
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const b2 = mockB2({
+      putObject: vi.fn(async () => {
+        throw new Error("upload failed");
+      }),
+    });
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const rm = fs.promises.rm.bind(fs.promises);
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === path.resolve(lockDir)) {
+        throw new Error("release failed");
+      }
+      return rm(target, options);
+    });
+
+    await expect(push(config, stateDir, b2, logger)).rejects.toThrow("upload failed");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to release push lock"),
+    );
+
+    rmSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("adds a random suffix to snapshot IDs", () => {
     const snapshotId = createSnapshotId("2026-02-19T12:00:00.000Z");
 

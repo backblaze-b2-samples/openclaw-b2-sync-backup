@@ -43,10 +43,19 @@ export async function push(
   options?: PushOptions,
 ): Promise<void> {
   const lock = await acquirePushLock(stateDir);
+  let pushError: unknown;
   try {
     await pushWithLock(config, stateDir, b2, logger, options);
+  } catch (err) {
+    pushError = err;
+    throw err;
   } finally {
-    await lock.release();
+    try {
+      await lock.release();
+    } catch (err) {
+      logger.warn(`b2-backup: failed to release push lock: ${String(err)}`);
+      if (!pushError) throw err;
+    }
   }
 }
 
@@ -193,7 +202,7 @@ async function acquirePushLock(stateDir: string): Promise<{ release: () => Promi
 
   return {
     async release() {
-      await fs.promises.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+      await fs.promises.rm(lockDir, { recursive: true, force: true });
     },
   };
 }
