@@ -27,6 +27,16 @@ async function writeConfig(stateDir: string, value: unknown): Promise<string> {
   return configPath;
 }
 
+async function writeConfigText(stateDir: string, value: string): Promise<string> {
+  const configPath = path.join(stateDir, "openclaw.json");
+  await fs.promises.writeFile(configPath, value, "utf8");
+  return configPath;
+}
+
+function configArgs(configPath: string, stateDir: string, ...extra: string[]): string[] {
+  return ["--config", configPath, "--state-dir", stateDir, ...extra];
+}
+
 function parseJsonOutput<T extends CliJsonOutput>(stdout: string): T {
   return JSON.parse(stdout) as T;
 }
@@ -55,7 +65,10 @@ describe("openclaw-b2-backup-push CLI", () => {
     const parsed = parseArgs([
       "--config",
       "/tmp/openclaw.json",
+      "--state-dir",
+      "/tmp/openclaw-state",
       "--dry-run",
+      "--allow-empty-state",
       "--json",
       "--quiet",
     ]);
@@ -64,7 +77,9 @@ describe("openclaw-b2-backup-push CLI", () => {
       ok: true,
       options: {
         configPath: "/tmp/openclaw.json",
+        stateDir: "/tmp/openclaw-state",
         dryRun: true,
+        allowEmptyState: true,
         help: false,
         json: true,
         quiet: true,
@@ -99,6 +114,7 @@ describe("openclaw-b2-backup-push CLI", () => {
       ok: false,
       message: "--config requires a path",
       options: {
+        allowEmptyState: false,
         dryRun: false,
         help: false,
         json: true,
@@ -140,7 +156,7 @@ describe("openclaw-b2-backup-push CLI", () => {
     const createB2 = vi.fn(async () => b2);
     const push = vi.fn(async () => undefined);
 
-    const result = await runCli(["--config", configPath, "--quiet"], {
+    const result = await runCli(configArgs(configPath, stateDir, "--quiet"), {
       createB2Client: createB2,
       push,
     });
@@ -169,6 +185,7 @@ describe("openclaw-b2-backup-push CLI", () => {
     const result = await runCli(["--quiet"], {
       env: {
         OPENCLAW_CONFIG: configPath,
+        OPENCLAW_STATE_DIR: stateDir,
         B2_APPLICATION_KEY_ID: "env-key",
         B2_APPLICATION_KEY: "env-secret",
         B2_BUCKET_NAME: "env-bucket",
@@ -210,7 +227,7 @@ describe("openclaw-b2-backup-push CLI", () => {
     const createB2 = vi.fn(async () => b2);
     const push = vi.fn(async () => undefined);
 
-    const result = await runCli(["--config", configPath, "--dry-run", "--json"], {
+    const result = await runCli(configArgs(configPath, stateDir, "--dry-run", "--json"), {
       createB2Client: createB2,
       push,
     });
@@ -228,12 +245,132 @@ describe("openclaw-b2-backup-push CLI", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("parses JSON5 OpenClaw configs with comments and trailing commas", async () => {
+    const stateDir = await makeStateDir();
+    createdDirs.push(stateDir);
+    const configPath = await writeConfigText(
+      stateDir,
+      `{
+        // OpenClaw config files are JSON5.
+        plugins: {
+          entries: {
+            "openclaw-b2-backup": {
+              config: {
+                keyId: "key-id",
+                applicationKey: "app-key",
+                bucket: "bucket-name",
+                region: "us-west-004",
+              },
+            },
+          },
+        },
+      }`,
+    );
+    const headBucket = vi.fn(async () => undefined);
+    const b2 = createMockB2({ headBucket });
+
+    const result = await runCli(configArgs(configPath, stateDir, "--dry-run", "--json"), {
+      createB2Client: vi.fn(async () => b2),
+    });
+
+    expect(result.exitCode).toBe(EXIT_CODES.success);
+    expect(parseJsonOutput<CliJsonSuccess>(result.stdout)).toEqual(
+      expect.objectContaining({
+        ok: true,
+        mode: "dry-run",
+        bucket: "bucket-name",
+      }),
+    );
+    expect(headBucket).toHaveBeenCalledWith("bucket-name");
+  });
+
+  it("rejects external config paths without an explicit state directory", async () => {
+    const configDir = await makeStateDir();
+    createdDirs.push(configDir);
+    const configPath = await writeConfig(configDir, {
+      plugins: {
+        entries: {
+          "openclaw-b2-backup": {
+            config: {
+              keyId: "key-id",
+              applicationKey: "app-key",
+              bucket: "bucket-name",
+              region: "us-west-004",
+            },
+          },
+        },
+      },
+    });
+
+    const result = await runCli(["--config", configPath, "--json"], {
+      env: { HOME: path.join(configDir, "home") },
+    });
+
+    expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
+    expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
+      ok: false,
+      code: "config_malformed",
+      error: expect.stringContaining("set --state-dir"),
+    });
+  });
+
+  it("rejects empty state directories unless acknowledged", async () => {
+    const configDir = await makeStateDir();
+    const stateDir = await makeStateDir();
+    createdDirs.push(configDir, stateDir);
+    const configPath = await writeConfig(configDir, {
+      plugins: {
+        entries: {
+          "openclaw-b2-backup": {
+            config: {
+              keyId: "key-id",
+              applicationKey: "app-key",
+              bucket: "bucket-name",
+              region: "us-west-004",
+            },
+          },
+        },
+      },
+    });
+    const createB2 = vi.fn(async () => createMockB2());
+    const push = vi.fn(async () => undefined);
+
+    const result = await runCli(configArgs(configPath, stateDir, "--json"), {
+      createB2Client: createB2,
+      push,
+    });
+
+    expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
+    expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
+      ok: false,
+      code: "config_malformed",
+      error: expect.stringContaining("contains no syncable OpenClaw state files"),
+    });
+    expect(createB2).not.toHaveBeenCalled();
+    expect(push).not.toHaveBeenCalled();
+
+    const acknowledged = await runCli(
+      configArgs(configPath, stateDir, "--allow-empty-state", "--quiet"),
+      {
+        createB2Client: createB2,
+        push,
+      },
+    );
+    expect(acknowledged.exitCode).toBe(EXIT_CODES.success);
+    expect(push).toHaveBeenCalledWith(
+      expect.objectContaining({ bucket: "bucket-name" }),
+      stateDir,
+      expect.any(Object),
+      expect.any(Object),
+    );
+  });
+
   it("returns config malformed when required config is missing", async () => {
     const stateDir = await makeStateDir();
     createdDirs.push(stateDir);
     const configPath = await writeConfig(stateDir, {});
 
-    const result = await runCli(["--config", configPath, "--json"]);
+    const result = await runCli(configArgs(configPath, stateDir, "--json"));
 
     expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
     expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
@@ -256,7 +393,7 @@ describe("openclaw-b2-backup-push CLI", () => {
       },
     });
 
-    const result = await runCli(["--config", configPath, "--json"]);
+    const result = await runCli(configArgs(configPath, stateDir, "--json"));
 
     expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
     expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
@@ -285,7 +422,7 @@ describe("openclaw-b2-backup-push CLI", () => {
       },
     });
 
-    const result = await runCli(["--config", configPath, "--json"]);
+    const result = await runCli(configArgs(configPath, stateDir, "--json"));
 
     expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
     expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
@@ -317,7 +454,7 @@ describe("openclaw-b2-backup-push CLI", () => {
       throw new Error("upload failed");
     });
 
-    const result = await runCli(["--config", configPath, "--json"], {
+    const result = await runCli(configArgs(configPath, stateDir, "--json"), {
       createB2Client: vi.fn(async () => b2),
       push,
     });
@@ -349,7 +486,7 @@ describe("openclaw-b2-backup-push CLI", () => {
     });
     const b2 = createMockB2();
 
-    const result = await runCli(["--config", configPath, "--quiet"], {
+    const result = await runCli(configArgs(configPath, stateDir, "--quiet"), {
       createB2Client: vi.fn(async () => b2),
       push: vi.fn(async () => {
         throw new Error("upload failed");
@@ -382,7 +519,7 @@ describe("openclaw-b2-backup-push CLI", () => {
     const logWritten = deferred();
     const releasePush = deferred();
     const chunks: string[] = [];
-    const run = runCli(["--config", configPath], {
+    const run = runCli(configArgs(configPath, stateDir), {
       createB2Client: vi.fn(async () => b2),
       writeStderr: (chunk) => {
         chunks.push(chunk);

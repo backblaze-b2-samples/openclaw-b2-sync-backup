@@ -124,7 +124,7 @@ export async function pruneSnapshots(
   for (const snapshotId of toDelete) {
     const objects = await b2.listObjects(bucket, `${prefix}/${snapshotId}/`);
     for (const obj of objects) {
-      await b2.deleteObject(bucket, obj.key);
+      await deleteObjectIfPresent(b2, bucket, obj.key);
     }
   }
   return toDelete;
@@ -145,8 +145,22 @@ export async function pruneSafetySnapshots(
   for (const safetyDir of toDelete) {
     const objects = await b2.listObjects(bucket, `${prefix}/${safetyDir}/`);
     for (const obj of objects) {
-      await b2.deleteObject(bucket, obj.key);
+      await deleteObjectIfPresent(b2, bucket, obj.key);
     }
   }
   return toDelete;
+}
+
+async function deleteObjectIfPresent(b2: B2Client, bucket: string, key: string): Promise<void> {
+  try {
+    await b2.deleteObject(bucket, key);
+  } catch (err) {
+    if (isMissingObjectError(err)) return;
+    throw err;
+  }
+}
+
+function isMissingObjectError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /\b404\b|NoSuchKey|Not Found/i.test(err.message);
 }

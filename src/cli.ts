@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { B2ConfigError, createB2Client } from "./b2-client.js";
-import { B2BackupConfigError, resolveB2BackupConfigFromOpenClawConfig } from "./config.js";
+import { B2BackupConfigError, loadB2BackupConfigFromOpenClawFile } from "./config.js";
+import { gatherFiles } from "./gatherer.js";
 import { push } from "./push.js";
 import type { B2Client } from "./b2-client.js";
 import type { ResolvedB2BackupConfig } from "./types.js";
 
-const CONFIG_FILENAME = "openclaw.json";
 const DEFAULT_PREFIX = "openclaw-backup";
 
 export const EXIT_CODES = {
@@ -23,10 +22,12 @@ type Env = Record<string, string | undefined>;
 
 type CliOptions = {
   configPath?: string;
+  stateDir?: string;
   dryRun: boolean;
   json: boolean;
   quiet: boolean;
   help: boolean;
+  allowEmptyState: boolean;
 };
 
 type CliContext = {
@@ -48,6 +49,7 @@ type CliDeps = {
   readFile?: (filePath: string, encoding: BufferEncoding) => Promise<string>;
   createB2Client?: typeof createB2Client;
   push?: typeof push;
+  gatherFiles?: typeof gatherFiles;
   writeStderr?: (chunk: string) => void;
 };
 
@@ -80,27 +82,23 @@ type ParsedArgs =
   | { ok: true; options: CliOptions }
   | { ok: false; message: string; options: CliOptions };
 
-class ConfigError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ConfigError";
-  }
-}
-
 const defaultOptions = (): CliOptions => ({
   dryRun: false,
   json: false,
   quiet: false,
   help: false,
+  allowEmptyState: false,
 });
 
 function usage(): string {
   return [
-    "Usage: openclaw-b2-backup-push [--config <path>] [--dry-run] [--json] [--quiet]",
+    "Usage: openclaw-b2-backup-push [--config <path>] [--state-dir <path>] [--dry-run] [--json] [--quiet]",
     "",
     "Options:",
     "  --config <path>  OpenClaw config path (defaults to ~/.openclaw/openclaw.json)",
+    "  --state-dir <path>  OpenClaw state directory when config is external",
     "  --dry-run        Check B2 bucket access without uploading a snapshot",
+    "  --allow-empty-state  Treat an empty sync set as a successful push",
     "  --json           Print machine-readable JSON",
     "  --quiet          Suppress human-readable success and progress output",
     "  -h, --help       Show this help",
@@ -119,6 +117,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
 
     if (arg === "--dry-run") {
       options.dryRun = true;
+      continue;
+    }
+    if (arg === "--allow-empty-state") {
+      options.allowEmptyState = true;
       continue;
     }
     if (arg === "--json") {
@@ -150,6 +152,23 @@ export function parseArgs(argv: string[]): ParsedArgs {
       options.configPath = value;
       continue;
     }
+    if (arg === "--state-dir") {
+      const value = argv[i + 1];
+      if (!value || value.startsWith("-")) {
+        return { ok: false, message: "--state-dir requires a path", options };
+      }
+      options.stateDir = value;
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith("--state-dir=")) {
+      const value = arg.slice("--state-dir=".length);
+      if (!value) {
+        return { ok: false, message: "--state-dir requires a path", options };
+      }
+      options.stateDir = value;
+      continue;
+    }
     if (arg.startsWith("-")) {
       return { ok: false, message: `unknown option: ${arg}`, options };
     }
@@ -176,6 +195,10 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
 
   try {
     const context = await loadCliContext(options, deps);
+    if (!options.dryRun) {
+      await validateSyncableState(context.stateDir, options, deps.gatherFiles ?? gatherFiles);
+    }
+
     const createClient = deps.createB2Client ?? createB2Client;
     const runPush = deps.push ?? push;
     const b2 = await createClient(
@@ -197,11 +220,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
     return success(options, context, "push", stderr);
   } catch (err) {
     const message = errorMessage(err);
-    if (
-      err instanceof ConfigError ||
-      err instanceof B2BackupConfigError ||
-      err instanceof B2ConfigError
-    ) {
+    if (err instanceof B2BackupConfigError || err instanceof B2ConfigError) {
       return failure(options, EXIT_CODES.configMalformed, "config_malformed", message, stderr);
     }
     return failure(options, EXIT_CODES.pushFailure, "push_failure", message, stderr);
@@ -209,88 +228,28 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
 }
 
 async function loadCliContext(options: CliOptions, deps: CliDeps): Promise<CliContext> {
-  const env = deps.env ?? process.env;
-  const cwd = deps.cwd ?? process.cwd();
-  const homedir = deps.homedir ?? os.homedir;
-  const stateDir = resolveStateDir(env, cwd, homedir, options.configPath);
-  const configPath = resolveConfigPath(options.configPath, env, cwd, homedir, stateDir);
-  const readFile = deps.readFile ?? fs.promises.readFile;
-  let data: string;
-
-  try {
-    data = await readFile(configPath, "utf8");
-  } catch (err) {
-    throw new ConfigError(`cannot read config ${configPath}: ${errorMessage(err)}`);
-  }
-
-  let rawConfig: unknown;
-  try {
-    rawConfig = JSON.parse(data);
-  } catch (err) {
-    throw new ConfigError(`config ${configPath} is not valid JSON: ${errorMessage(err)}`);
-  }
-
-  const config = resolveB2BackupConfigFromOpenClawConfig(rawConfig, env);
-
-  return { config, configPath, stateDir };
+  return loadB2BackupConfigFromOpenClawFile({
+    configPath: options.configPath,
+    stateDir: options.stateDir,
+    env: deps.env,
+    cwd: deps.cwd,
+    homedir: deps.homedir,
+    readFile: deps.readFile,
+  });
 }
 
-function resolveConfigPath(
-  explicitConfigPath: string | undefined,
-  env: Env,
-  cwd: string,
-  homedir: () => string,
+async function validateSyncableState(
   stateDir: string,
-): string {
-  const rawConfigPath =
-    explicitConfigPath?.trim() ||
-    env.OPENCLAW_CONFIG?.trim() ||
-    env.OPENCLAW_CONFIG_PATH?.trim();
-  if (rawConfigPath) return resolveUserPath(rawConfigPath, env, cwd, homedir);
-  return path.join(stateDir, CONFIG_FILENAME);
-}
-
-function resolveStateDir(
-  env: Env,
-  cwd: string,
-  homedir: () => string,
-  explicitConfigPath?: string,
-): string {
-  const rawStateDir = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
-  if (rawStateDir) return resolveUserPath(rawStateDir, env, cwd, homedir);
-
-  const rawConfigPath =
-    explicitConfigPath?.trim() ||
-    env.OPENCLAW_CONFIG?.trim() ||
-    env.OPENCLAW_CONFIG_PATH?.trim();
-  if (rawConfigPath) {
-    return path.dirname(resolveUserPath(rawConfigPath, env, cwd, homedir));
-  }
-
-  return path.join(resolveHomeDir(env, cwd, homedir), ".openclaw");
-}
-
-function resolveUserPath(input: string, env: Env, cwd: string, homedir: () => string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveHomeDir(env, cwd, homedir)));
-  }
-  if (path.isAbsolute(trimmed)) return path.resolve(trimmed);
-  return path.resolve(cwd, trimmed);
-}
-
-function resolveHomeDir(env: Env, cwd: string, homedir: () => string): string {
-  const openclawHome = env.OPENCLAW_HOME?.trim();
-  if (openclawHome) {
-    return resolveUserPath(openclawHome, { ...env, OPENCLAW_HOME: undefined }, cwd, homedir);
-  }
-  const envHome = env.HOME?.trim() || env.USERPROFILE?.trim();
-  if (envHome) return path.resolve(envHome);
-  try {
-    return path.resolve(homedir());
-  } catch {
-    return cwd;
-  }
+  options: CliOptions,
+  collectFiles: typeof gatherFiles,
+): Promise<void> {
+  if (options.allowEmptyState) return;
+  const files = await collectFiles(stateDir);
+  if (files.length > 0) return;
+  throw new B2BackupConfigError(
+    `state directory ${stateDir} contains no syncable OpenClaw state files; ` +
+      "set --allow-empty-state to acknowledge an empty snapshot.",
+  );
 }
 
 function createLogger(

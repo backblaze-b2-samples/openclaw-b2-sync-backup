@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   B2BackupConfigError,
   extractB2BackupPluginConfig,
+  parseOpenClawConfig,
   resolveB2BackupConfigFromOpenClawConfig,
+  resolveOpenClawConfigPaths,
 } from "./config.js";
 
 describe("OpenClaw B2 config extraction", () => {
@@ -83,5 +85,59 @@ describe("OpenClaw B2 config extraction", () => {
         },
       }),
     ).toThrow(B2BackupConfigError);
+  });
+
+  it("parses JSON5 OpenClaw config files", () => {
+    expect(
+      parseOpenClawConfig(`{
+        // OpenClaw configs allow comments and trailing commas.
+        plugins: {
+          entries: {
+            "openclaw-b2-backup": {
+              config: {
+                keyId: "key-id",
+                applicationKey: "app-key",
+                bucket: "bucket-name",
+                region: "us-west-004",
+              },
+            },
+          },
+        },
+      }`),
+    ).toEqual({
+      plugins: {
+        entries: {
+          "openclaw-b2-backup": {
+            config: {
+              keyId: "key-id",
+              applicationKey: "app-key",
+              bucket: "bucket-name",
+              region: "us-west-004",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("requires explicit state dir for external config paths", () => {
+    expect(() =>
+      resolveOpenClawConfigPaths({
+        configPath: "/etc/openclaw/openclaw.json",
+        env: { HOME: "/home/me" },
+      }),
+    ).toThrow(B2BackupConfigError);
+  });
+
+  it("resolves explicit state directory aliases for external config paths", () => {
+    expect(
+      resolveOpenClawConfigPaths({
+        configPath: "/etc/openclaw/openclaw.json",
+        env: { HOME: "/home/me", CLAWDBOT_STATE_DIR: "/var/lib/openclaw" },
+      }),
+    ).toEqual({
+      configPath: "/etc/openclaw/openclaw.json",
+      stateDir: "/var/lib/openclaw",
+    });
   });
 });

@@ -30,7 +30,7 @@ Anyone running OpenClaw who wants automatic off-machine backups without managing
 - **Safety snapshots before rollback** — creates a restore point before any pull, stored out-of-band and never auto-pruned
 - **Compaction protection** — triggers a push before compaction fires (5-minute debounce to prevent rapid-fire)
 - **Conversational rollback** — `b2_rollback` agent tool lets you list and restore snapshots from chat
-- **Zero runtime dependencies** — hand-rolled S3 Sig V4 client, uses only `node:crypto` and OpenClaw's bundled `croner`
+- **Small runtime surface** — hand-rolled S3 Sig V4 client with only focused runtime helpers for scheduling and JSON5 config parsing
 - **Backward-compatible decryption** — auto-detects unencrypted data and passes through, so enabling encryption doesn't break old snapshots
 
 ## Quick Start
@@ -113,10 +113,10 @@ Native B2 authorize-based region discovery was removed so the runtime uses only 
 ```bash
 openclaw-b2-backup-push
 openclaw-b2-backup-push --dry-run
-openclaw-b2-backup-push --config /path/to/openclaw.json --json
+openclaw-b2-backup-push --config /path/to/openclaw.json --state-dir /path/to/state --json
 ```
 
-The config path defaults to `~/.openclaw/openclaw.json`. Override it with `--config`, `OPENCLAW_CONFIG`, or `OPENCLAW_CONFIG_PATH`. `OPENCLAW_STATE_DIR` is honored when set; otherwise the state directory is resolved from the config location.
+The config path defaults to `~/.openclaw/openclaw.json` and is parsed as JSON5, matching OpenClaw config files with comments or trailing commas. Override it with `--config`, `OPENCLAW_CONFIG`, or `OPENCLAW_CONFIG_PATH`. The state directory defaults to `~/.openclaw`; override it with `--state-dir`, `OPENCLAW_STATE_DIR`, or `CLAWDBOT_STATE_DIR`. `OPENCLAW_HOME` changes the home base used for those defaults. If `--config` or a config-path environment variable points outside the default state directory, pass `--state-dir` or set a state-dir environment variable explicitly.
 
 Exit codes:
 
@@ -132,6 +132,8 @@ Options:
 | Option | Behavior |
 |--------|----------|
 | `--dry-run` | Auth-checks bucket access with no upload |
+| `--state-dir <path>` | Uses an explicit OpenClaw state directory when config is external |
+| `--allow-empty-state` | Allows a successful push when no syncable OpenClaw state files are found |
 | `--json` | Emits machine-readable JSON |
 | `--quiet` | Suppresses human-readable success and progress output; failures still print one stderr diagnostic |
 
@@ -316,7 +318,7 @@ openclaw plugins list  # should show openclaw-b2-backup
 pnpm test
 ```
 
-135 tests across 11 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
+143 tests across 11 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
 
 ## License
 

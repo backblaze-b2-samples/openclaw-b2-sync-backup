@@ -268,6 +268,19 @@ describe("snapshots", () => {
       );
       expect(b2.listObjects).toHaveBeenCalledTimes(1);
     });
+
+    it("tolerates objects already removed during pruning", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/2026-01-02T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ]);
+      b2.deleteObject.mockRejectedValueOnce(new Error("b2 deleteObject failed (404): missing"));
+
+      const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
+
+      expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
+      expect(b2.deleteObject).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("pruneSafetySnapshots", () => {
@@ -322,6 +335,27 @@ describe("snapshots", () => {
       const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 2);
       expect(pruned).toEqual([]);
       expect(b2.deleteObject).not.toHaveBeenCalled();
+    });
+
+    it("tolerates safety objects already removed during pruning", async () => {
+      const b2 = createMockB2([
+        {
+          key: `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+      b2.deleteObject.mockRejectedValueOnce(new Error("NoSuchKey"));
+
+      const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 1);
+
+      expect(pruned).toEqual(["safety-2026-01-01T00-00-00Z"]);
+      expect(b2.deleteObject).toHaveBeenCalledTimes(1);
     });
   });
 });
