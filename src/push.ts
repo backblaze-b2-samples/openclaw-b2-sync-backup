@@ -19,6 +19,7 @@ type PushLogger = {
 
 const PUSH_LOCK_DIRNAME = ".b2-backup-push.lock";
 const PUSH_LOCK_OWNER_FILENAME = "owner.json";
+const STALE_OWNERLESS_LOCK_GRACE_MS = 30_000;
 
 export type PushOptions = {
   /** Override the complete snapshot root (used for safety snapshots). */
@@ -225,13 +226,29 @@ async function removeDeadProcessLock(lockDir: string): Promise<boolean> {
   try {
     owner = JSON.parse(await fs.promises.readFile(ownerPath, "utf8")) as { pid?: unknown };
   } catch {
-    return false;
+    return removeAgedOwnerlessLock(lockDir);
   }
 
   if (typeof owner.pid !== "number" || !Number.isInteger(owner.pid) || owner.pid <= 0) {
-    return false;
+    return removeAgedOwnerlessLock(lockDir);
   }
   if (isProcessRunning(owner.pid)) return false;
+
+  await fs.promises.rm(lockDir, { recursive: true, force: true });
+  return true;
+}
+
+async function removeAgedOwnerlessLock(lockDir: string): Promise<boolean> {
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.stat(lockDir);
+  } catch {
+    return false;
+  }
+
+  if (Date.now() - stat.mtimeMs < STALE_OWNERLESS_LOCK_GRACE_MS) {
+    return false;
+  }
 
   await fs.promises.rm(lockDir, { recursive: true, force: true });
   return true;

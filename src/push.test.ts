@@ -139,6 +139,30 @@ describe("push", () => {
     await fs.promises.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("removes an aged lock directory with no owner metadata", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const lockDir = path.join(stateDir, ".b2-backup-push.lock");
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    await fs.promises.mkdir(lockDir);
+    const old = new Date(Date.now() - 60_000);
+    await fs.promises.utimes(lockDir, old, old);
+    const putObject = vi.fn(async () => undefined);
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+
+    await push(config, stateDir, mockB2({ putObject }), logger);
+
+    expect(putObject).toHaveBeenCalled();
+    await expect(fs.promises.access(lockDir)).rejects.toThrow();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("removes the lock directory if writing owner metadata fails", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
     const lockDir = path.join(stateDir, ".b2-backup-push.lock");

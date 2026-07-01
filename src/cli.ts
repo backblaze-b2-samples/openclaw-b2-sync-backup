@@ -109,6 +109,10 @@ function usage(): string {
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const options = defaultOptions();
+  for (const arg of argv) {
+    if (arg === "--json") options.json = true;
+    if (arg === "--quiet") options.quiet = true;
+  }
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]!;

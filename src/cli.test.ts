@@ -73,10 +73,34 @@ describe("openclaw-b2-backup-push CLI", () => {
   });
 
   it("returns usage error for unknown options", async () => {
-    const result = await runCli(["--nope", "--json"]);
+    const result = await runCli(["--nope"]);
 
     expect(result.exitCode).toBe(EXIT_CODES.usage);
     expect(result.stderr).toContain("unknown option");
+  });
+
+  it("honors json output for usage errors after the failing option", async () => {
+    const parsed = parseArgs(["--config", "--json"]);
+    expect(parsed).toEqual({
+      ok: false,
+      message: "--config requires a path",
+      options: {
+        dryRun: false,
+        help: false,
+        json: true,
+        quiet: false,
+      },
+    });
+
+    const result = await runCli(["--config", "--json"]);
+
+    expect(result.exitCode).toBe(EXIT_CODES.usage);
+    expect(result.stderr).toBe("");
+    expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
+      ok: false,
+      code: "usage",
+      error: "--config requires a path",
+    });
   });
 
   it("pushes using modern OpenClaw plugin config", async () => {
