@@ -98,6 +98,75 @@ describe("push", () => {
     await fs.promises.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("returns a lock error when another process wins the stale-lock retry", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const lockDir = path.join(stateDir, ".b2-backup-push.lock");
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    await fs.promises.mkdir(lockDir);
+    await fs.promises.writeFile(path.join(lockDir, "owner.json"), JSON.stringify({ pid: 12345 }));
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const rm = fs.promises.rm.bind(fs.promises);
+    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+      await rm(target, options);
+      if (path.resolve(String(target)) === path.resolve(lockDir)) {
+        await fs.promises.mkdir(lockDir, { recursive: true });
+        await fs.promises.writeFile(
+          path.join(lockDir, "owner.json"),
+          JSON.stringify({ pid: process.pid }),
+        );
+      }
+    });
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => {
+      const err = new Error("no such process") as Error & { code: string };
+      err.code = "ESRCH";
+      throw err;
+    });
+
+    await expect(push(config, stateDir, mockB2(), logger)).rejects.toThrow(PushLockError);
+    await expect(push(config, stateDir, mockB2(), logger)).rejects.toThrow(
+      "another push is already running",
+    );
+
+    rmSpy.mockRestore();
+    killSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("removes the lock directory if writing owner metadata fails", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const lockDir = path.join(stateDir, ".b2-backup-push.lock");
+    const ownerPath = path.join(lockDir, "owner.json");
+    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const writeFile = fs.promises.writeFile.bind(fs.promises);
+    const writeSpy = vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, data, options) => {
+      if (path.resolve(String(file)) === path.resolve(ownerPath)) {
+        throw new Error("disk full");
+      }
+      return writeFile(file, data, options);
+    });
+
+    await expect(push(config, stateDir, mockB2(), logger)).rejects.toThrow("disk full");
+    await expect(fs.promises.access(lockDir)).rejects.toThrow();
+
+    writeSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("adds a random suffix to snapshot IDs", () => {
     const snapshotId = createSnapshotId("2026-02-19T12:00:00.000Z");
 

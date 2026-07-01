@@ -176,23 +176,35 @@ async function acquirePushLock(stateDir: string): Promise<{ release: () => Promi
   const lockDir = path.join(stateDir, PUSH_LOCK_DIRNAME);
   await fs.promises.mkdir(stateDir, { recursive: true });
 
-  try {
-    await fs.promises.mkdir(lockDir);
-  } catch (err) {
-    if (!isNodeError(err, "EEXIST")) throw err;
-    if (await removeDeadProcessLock(lockDir)) {
-      await fs.promises.mkdir(lockDir);
-    } else {
+  if (!(await tryCreateLockDir(lockDir))) {
+    const removedStaleLock = await removeDeadProcessLock(lockDir);
+    if (!removedStaleLock || !(await tryCreateLockDir(lockDir))) {
       throw new PushLockError(`another push is already running (lock: ${lockDir})`);
     }
   }
 
-  await writeLockOwner(lockDir);
+  try {
+    await writeLockOwner(lockDir);
+  } catch (err) {
+    await fs.promises.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
+
   return {
     async release() {
       await fs.promises.rm(lockDir, { recursive: true, force: true }).catch(() => undefined);
     },
   };
+}
+
+async function tryCreateLockDir(lockDir: string): Promise<boolean> {
+  try {
+    await fs.promises.mkdir(lockDir);
+    return true;
+  } catch (err) {
+    if (isNodeError(err, "EEXIST")) return false;
+    throw err;
+  }
 }
 
 async function writeLockOwner(lockDir: string): Promise<void> {
