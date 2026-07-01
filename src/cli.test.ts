@@ -133,6 +133,34 @@ describe("openclaw-b2-backup-push CLI", () => {
     });
   });
 
+  it("rejects equals-form config values that look like options", () => {
+    expect(parseArgs(["--config=--json"])).toEqual({
+      ok: false,
+      message: "--config requires a path",
+      options: {
+        allowEmptyState: false,
+        dryRun: false,
+        help: false,
+        json: false,
+        quiet: false,
+      },
+    });
+  });
+
+  it("rejects equals-form state-dir values that look like options", () => {
+    expect(parseArgs(["--state-dir=--json"])).toEqual({
+      ok: false,
+      message: "--state-dir requires a path",
+      options: {
+        allowEmptyState: false,
+        dryRun: false,
+        help: false,
+        json: false,
+        quiet: false,
+      },
+    });
+  });
+
   it("pushes using modern OpenClaw plugin config", async () => {
     const stateDir = await makeStateDir();
     createdDirs.push(stateDir);
@@ -363,6 +391,37 @@ describe("openclaw-b2-backup-push CLI", () => {
       expect.any(Object),
       expect.any(Object),
     );
+  });
+
+  it("reports unreadable state directory errors before gathering files", async () => {
+    const configDir = await makeStateDir();
+    const stateDir = path.join(configDir, "missing-state");
+    createdDirs.push(configDir);
+    const configPath = await writeConfig(configDir, {
+      plugins: {
+        entries: {
+          "openclaw-b2-backup": {
+            config: {
+              keyId: "key-id",
+              applicationKey: "app-key",
+              bucket: "bucket-name",
+              region: "us-west-004",
+            },
+          },
+        },
+      },
+    });
+    const gatherFiles = vi.fn(async () => []);
+
+    const result = await runCli(configArgs(configPath, stateDir, "--json"), { gatherFiles });
+
+    expect(result.exitCode).toBe(EXIT_CODES.configMalformed);
+    expect(parseJsonOutput<CliJsonFailure>(result.stdout)).toEqual({
+      ok: false,
+      code: "config_malformed",
+      error: expect.stringContaining(`cannot read state directory ${stateDir}`),
+    });
+    expect(gatherFiles).not.toHaveBeenCalled();
   });
 
   it("returns config malformed when required config is missing", async () => {

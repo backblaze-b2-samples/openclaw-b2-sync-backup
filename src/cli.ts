@@ -146,7 +146,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg.startsWith("--config=")) {
       const value = arg.slice("--config=".length);
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         return { ok: false, message: "--config requires a path", options };
       }
       options.configPath = value;
@@ -163,7 +163,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     if (arg.startsWith("--state-dir=")) {
       const value = arg.slice("--state-dir=".length);
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         return { ok: false, message: "--state-dir requires a path", options };
       }
       options.stateDir = value;
@@ -244,12 +244,28 @@ async function validateSyncableState(
   collectFiles: typeof gatherFiles,
 ): Promise<void> {
   if (options.allowEmptyState) return;
+  await assertReadableStateDirectory(stateDir);
   const files = await collectFiles(stateDir);
   if (files.length > 0) return;
   throw new B2BackupConfigError(
     `state directory ${stateDir} contains no syncable OpenClaw state files; ` +
       "set --allow-empty-state to acknowledge an empty snapshot.",
   );
+}
+
+async function assertReadableStateDirectory(stateDir: string): Promise<void> {
+  try {
+    const stat = await fs.promises.stat(stateDir);
+    if (!stat.isDirectory()) {
+      throw new B2BackupConfigError(`state directory ${stateDir} is not a directory`);
+    }
+    await fs.promises.access(stateDir, fs.constants.R_OK | fs.constants.X_OK);
+  } catch (err) {
+    if (err instanceof B2BackupConfigError) throw err;
+    throw new B2BackupConfigError(
+      `cannot read state directory ${stateDir}: ${errorMessage(err)}`,
+    );
+  }
 }
 
 function createLogger(
