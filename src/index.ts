@@ -1,4 +1,4 @@
-export { B2ConfigError, createB2Client } from "./b2-client.js";
+export { B2ConfigError, B2RequestError, createB2Client } from "./b2-client.js";
 export type { B2Client, B2ObjectEntry } from "./b2-client.js";
 export { createDebounceGate } from "./debounce.js";
 export type { DebounceGate } from "./debounce.js";

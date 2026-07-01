@@ -1,4 +1,4 @@
-import type { B2Client, B2ClientWithPrefixes } from "./b2-client.js";
+import { B2RequestError, type B2Client, type B2ClientWithPrefixes } from "./b2-client.js";
 import { SAFETY_PREFIX } from "./types.js";
 
 function supportsPrefixListing(b2: B2Client): b2 is B2ClientWithPrefixes {
@@ -161,6 +161,5 @@ async function deleteObjectIfPresent(b2: B2Client, bucket: string, key: string):
 }
 
 function isMissingObjectError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  return /\b404\b|NoSuchKey|Not Found/i.test(err.message);
+  return err instanceof B2RequestError && err.status === 404 && err.code === "NoSuchKey";
 }

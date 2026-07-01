@@ -48,6 +48,18 @@ export class B2ConfigError extends Error {
   }
 }
 
+export class B2RequestError extends Error {
+  constructor(
+    public readonly operation: string,
+    public readonly status: number,
+    public readonly body: string,
+    public readonly code?: string,
+  ) {
+    super(`b2 ${operation} failed (${status})${body ? `: ${body}` : ""}`);
+    this.name = "B2RequestError";
+  }
+}
+
 type NormalizedB2ClientOptions = Required<
   Pick<B2ClientOptions, "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryJitterMs">
 > &
@@ -199,8 +211,7 @@ export async function createB2Client(
         clientOptions,
       );
       if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new Error(`b2 putObject failed (${resp.status}): ${text}`);
+        await throwB2RequestError(resp, "putObject");
       }
     },
 
@@ -217,8 +228,7 @@ export async function createB2Client(
         clientOptions,
       );
       if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new Error(`b2 getObject failed (${resp.status}): ${text}`);
+        await throwB2RequestError(resp, "getObject");
       }
       return Buffer.from(await resp.arrayBuffer());
     },
@@ -251,8 +261,7 @@ export async function createB2Client(
           clientOptions,
         );
         if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          throw new Error(`b2 listObjects failed (${resp.status}): ${text}`);
+          await throwB2RequestError(resp, "listObjects");
         }
         const xml = await resp.text();
         const page = parseListObjectsResponse(xml);
@@ -292,8 +301,7 @@ export async function createB2Client(
           clientOptions,
         );
         if (!resp.ok) {
-          const text = await resp.text().catch(() => "");
-          throw new Error(`b2 listPrefixes failed (${resp.status}): ${text}`);
+          await throwB2RequestError(resp, "listPrefixes");
         }
         const xml = await resp.text();
         const page = parseListObjectsResponse(xml);
@@ -317,8 +325,7 @@ export async function createB2Client(
         clientOptions,
       );
       if (!resp.ok) {
-        const text = await resp.text().catch(() => "");
-        throw new Error(`b2 deleteObject failed (${resp.status}): ${text}`);
+        await throwB2RequestError(resp, "deleteObject");
       }
     },
 
@@ -335,12 +342,21 @@ export async function createB2Client(
         clientOptions,
       );
       if (!resp.ok) {
-        throw new Error(`b2 headBucket failed (${resp.status})`);
+        await throwB2RequestError(resp, "headBucket");
       }
     },
   };
 
   return client;
+}
+
+async function throwB2RequestError(resp: Response, operation: string): Promise<never> {
+  const body = await resp.text().catch(() => "");
+  throw new B2RequestError(operation, resp.status, body, parseS3ErrorCode(body));
+}
+
+function parseS3ErrorCode(body: string): string | undefined {
+  return body.match(/<Code>\s*([^<]+?)\s*<\/Code>/i)?.[1]?.trim();
 }
 
 function normalizeClientOptions(

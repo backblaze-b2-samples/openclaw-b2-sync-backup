@@ -4,6 +4,7 @@ import {
   _resolveEndpoint as resolveEndpoint,
   _signRequest as signRequest,
   B2ConfigError,
+  B2RequestError,
   createB2Client,
 } from "./b2-client.js";
 
@@ -325,6 +326,26 @@ describe("createB2Client", () => {
         }),
       }),
     );
+  });
+
+  it("throws structured request errors with S3 error codes", async () => {
+    const body = "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 404 })));
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    await expect(b2.deleteObject("bucket", "missing.txt")).rejects.toMatchObject({
+      name: "B2RequestError",
+      operation: "deleteObject",
+      status: 404,
+      body,
+      code: "NoSuchKey",
+    });
+    await expect(b2.deleteObject("bucket", "missing.txt")).rejects.toThrow(B2RequestError);
   });
 
   it("retries transient B2 responses with attempt logging", async () => {

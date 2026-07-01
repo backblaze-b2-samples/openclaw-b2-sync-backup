@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { B2Client, B2ObjectEntry } from "./b2-client.js";
+import { B2RequestError, type B2Client, type B2ObjectEntry } from "./b2-client.js";
 import {
   getLatestSnapshot,
   listRegularSnapshots,
@@ -274,12 +274,36 @@ describe("snapshots", () => {
         { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
         { key: `${prefix}/2026-01-02T00-00-00Z/file.txt`, size: 10, lastModified: "" },
       ]);
-      b2.deleteObject.mockRejectedValueOnce(new Error("b2 deleteObject failed (404): missing"));
+      b2.deleteObject.mockRejectedValueOnce(
+        new B2RequestError(
+          "deleteObject",
+          404,
+          "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>",
+          "NoSuchKey",
+        ),
+      );
 
       const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
 
       expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
       expect(b2.deleteObject).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not suppress generic 404 delete failures", async () => {
+      const b2 = createMockB2([
+        { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+        { key: `${prefix}/2026-01-02T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ]);
+      b2.deleteObject.mockRejectedValueOnce(
+        new B2RequestError(
+          "deleteObject",
+          404,
+          "<Error><Code>NoSuchBucket</Code><Message>missing bucket</Message></Error>",
+          "NoSuchBucket",
+        ),
+      );
+
+      await expect(pruneSnapshots(b2, bucket, prefix, 1)).rejects.toThrow(B2RequestError);
     });
   });
 
@@ -350,7 +374,14 @@ describe("snapshots", () => {
           lastModified: "",
         },
       ]);
-      b2.deleteObject.mockRejectedValueOnce(new Error("NoSuchKey"));
+      b2.deleteObject.mockRejectedValueOnce(
+        new B2RequestError(
+          "deleteObject",
+          404,
+          "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>",
+          "NoSuchKey",
+        ),
+      );
 
       const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 1);
 
