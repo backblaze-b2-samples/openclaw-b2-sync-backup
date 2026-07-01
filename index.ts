@@ -1,66 +1,15 @@
 import type { AnyAgentTool, OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { createB2Client } from "./src/b2-client.js";
+import { resolveB2BackupConfig } from "./src/config.js";
 import { createDebounceGate } from "./src/debounce.js";
 import { pullSnapshot } from "./src/pull.js";
 import { push } from "./src/push.js";
 import { createPushCoordinator, DEFAULT_PUSH_DEADLINE_MS } from "./src/push-coordinator.js";
 import { createB2BackupService } from "./src/service.js";
 import { listRegularSnapshots, listSafetySnapshots } from "./src/snapshots.js";
-import type { B2BackupConfig, ResolvedB2BackupConfig } from "./src/types.js";
+import type { B2BackupConfig } from "./src/types.js";
 
-function readEnv(name: string): string | undefined {
-  const value = process.env[name]?.trim();
-  return value ? value : undefined;
-}
-
-function readConfigString(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export function resolveB2BackupConfig(
-  config: Partial<B2BackupConfig> | undefined,
-): ResolvedB2BackupConfig | null {
-  const keyId = readConfigString(config?.keyId) ?? readEnv("B2_APPLICATION_KEY_ID");
-  const applicationKey =
-    readConfigString(config?.applicationKey) ?? readEnv("B2_APPLICATION_KEY");
-  const bucket = readConfigString(config?.bucket) ?? readEnv("B2_BUCKET_NAME");
-  const region = readConfigString(config?.region) ?? readEnv("B2_REGION");
-  const endpoint = readConfigString(config?.endpoint) ?? readEnv("B2_ENDPOINT");
-  const prefix = readConfigString(config?.prefix);
-  const schedule = readConfigString(config?.schedule);
-
-  if (!keyId || !applicationKey || !bucket || !region) {
-    return null;
-  }
-
-  const resolved: ResolvedB2BackupConfig = {
-    keyId,
-    applicationKey,
-    bucket,
-    region,
-  };
-  if (endpoint) resolved.endpoint = endpoint;
-  if (prefix) resolved.prefix = prefix;
-  if (schedule) resolved.schedule = schedule;
-  if (typeof config?.encrypt === "boolean") resolved.encrypt = config.encrypt;
-  if (
-    typeof config?.keepSnapshots === "number" &&
-    Number.isInteger(config.keepSnapshots) &&
-    config.keepSnapshots >= 0
-  ) {
-    resolved.keepSnapshots = config.keepSnapshots;
-  }
-  if (
-    typeof config?.keepSafetySnapshots === "number" &&
-    Number.isInteger(config.keepSafetySnapshots) &&
-    config.keepSafetySnapshots >= 0
-  ) {
-    resolved.keepSafetySnapshots = config.keepSafetySnapshots;
-  }
-  return resolved;
-}
+export { resolveB2BackupConfig } from "./src/config.js";
 
 function toolText(text: string, details?: unknown) {
   return {

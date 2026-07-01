@@ -67,6 +67,14 @@ openclaw gateway restart
 
 That's it. The plugin uses Backblaze B2's S3-compatible API, encryption is on by default, and the first backup runs at midnight.
 
+Need a snapshot immediately before a risky change? Run the standalone push command:
+
+```bash
+openclaw-b2-backup-push
+```
+
+The command reads `~/.openclaw/openclaw.json` by default and uses the same push implementation as the gateway hooks. It is independent of the running gateway, so it also works when the daemon is stopped.
+
 ## Configuration
 
 Runtime requires the B2 key ID, application key, bucket, and region. They can come from plugin config or the standardized environment variables below. Existing three-field plugin configs still load, but backups pause with a clear warning until `region` or `B2_REGION` is added.
@@ -97,6 +105,35 @@ B2_BUCKET_NAME=your-bucket-name
 ### Region migration
 
 Native B2 authorize-based region discovery was removed so the runtime uses only the S3-compatible API for B2 storage operations. Existing configs that only include `keyId`, `applicationKey`, and `bucket` should add `region`; library callers of `createB2Client` should pass the region explicitly. Omitting region is still accepted at the type boundary for compatibility, but it fails fast before any network request.
+
+## Manual Push CLI
+
+`openclaw-b2-backup-push` forces an immediate snapshot without waiting for cron, shutdown, or compaction hooks:
+
+```bash
+openclaw-b2-backup-push
+openclaw-b2-backup-push --dry-run
+openclaw-b2-backup-push --config /path/to/openclaw.json --json
+```
+
+The config path defaults to `~/.openclaw/openclaw.json`. Override it with `--config`, `OPENCLAW_CONFIG`, or `OPENCLAW_CONFIG_PATH`. `OPENCLAW_STATE_DIR` is honored when set; otherwise the state directory is resolved from the config location.
+
+Exit codes:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Push or dry-run succeeded |
+| `1` | B2 auth/check/upload failed |
+| `64` | CLI usage error |
+| `65` | Config file or plugin config is malformed |
+
+Options:
+
+| Option | Behavior |
+|--------|----------|
+| `--dry-run` | Auth-checks bucket access with no upload |
+| `--json` | Emits machine-readable JSON |
+| `--quiet` | Suppresses human-readable success and progress output |
 
 ## What Gets Synced
 
@@ -162,6 +199,7 @@ Your new machine has the same memory, sessions, config, and personality as the o
 | Cron schedule | Midnight daily (default) | Full incremental push |
 | `gateway_stop` | Gateway shutdown | Final push before exit |
 | `before_compaction` | Before session compaction | Push with 5-min debounce to prevent rapid-fire |
+| `openclaw-b2-backup-push` | Manual operator command | Immediate push from outside the gateway process |
 | Auto-restore | Service start, empty state dir | Pull latest snapshot (no safety snapshot created) |
 
 ### Push (your machine -> B2)
@@ -226,6 +264,8 @@ src/
   sqlite-snapshot.ts  # Safe .backup() wrapper
   manifest.ts         # SHA-256 hashing + diff logic
   encryption.ts       # AES-256-GCM encrypt/decrypt/isEncrypted
+  config.ts           # Shared B2 config normalization
+  cli.ts              # Standalone manual push command
   debounce.ts         # Push rate limiter
   snapshots.ts        # List, prune, filter snapshots in B2
   push.ts             # Upload changed files to B2 (with PushOptions)
@@ -262,7 +302,7 @@ openclaw plugins list  # should show openclaw-b2-backup
 pnpm test
 ```
 
-71 tests across 7 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, and plugin registration.
+119 tests across 10 test files covering encryption round-trips, manifest diffing, snapshot filtering, file gathering, B2 client signing, debounce timing, CLI behavior, push coordination, and plugin registration.
 
 ## License
 
