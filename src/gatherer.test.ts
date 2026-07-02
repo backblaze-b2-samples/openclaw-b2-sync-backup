@@ -29,6 +29,14 @@ describe("gatherer", () => {
       expect(shouldInclude("workspace/nested/file.txt")).toBe(true);
     });
 
+    it("excludes paths containing ASCII control characters", () => {
+      expect(shouldInclude("workspace/attachment.pdf\r")).toBe(false);
+      expect(shouldInclude("workspace/nested\n/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/nested\t/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/nested\0/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/notes\u001f.txt")).toBe(false);
+    });
+
     it("includes multi-agent workspace directories", () => {
       expect(shouldInclude("workspace-research/SOUL.md")).toBe(true);
       expect(shouldInclude("workspace-coding/MEMORY.md")).toBe(true);

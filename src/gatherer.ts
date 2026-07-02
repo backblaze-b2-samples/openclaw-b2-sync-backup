@@ -31,7 +31,15 @@ function matchesAny(relativePath: string, patterns: RegExp[]): boolean {
   return patterns.some((p) => p.test(relativePath));
 }
 
+function hasAsciiControlChar(relativePath: string): boolean {
+  for (let i = 0; i < relativePath.length; i += 1) {
+    if (relativePath.charCodeAt(i) < 32) return true;
+  }
+  return false;
+}
+
 export function shouldInclude(relativePath: string): boolean {
+  if (hasAsciiControlChar(relativePath)) return false;
   if (matchesAny(relativePath, EXCLUDE_PATTERNS)) return false;
   return matchesAny(relativePath, INCLUDE_PATTERNS);
 }
