@@ -34,27 +34,30 @@ describe("push", () => {
 
   it("warns and skips backup files with control-character paths", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
-    await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
-    await fs.promises.mkdir(path.join(stateDir, "workspace"), { recursive: true });
-    await fs.promises.writeFile(path.join(stateDir, "workspace", "bad\u007f.txt"), "bad");
-    const putObject = vi.fn(async () => undefined);
-    const config: ResolvedB2BackupConfig = {
-      keyId: "test-key",
-      applicationKey: "test-secret",
-      bucket: "test-bucket",
-      region: "test-region",
-      encrypt: false,
-    };
-    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    try {
+      await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");
+      await fs.promises.mkdir(path.join(stateDir, "workspace"), { recursive: true });
+      await fs.promises.writeFile(path.join(stateDir, "workspace", "bad\u007f.txt"), "bad");
+      const putObject = vi.fn(async () => undefined);
+      const config: ResolvedB2BackupConfig = {
+        keyId: "test-key",
+        applicationKey: "test-secret",
+        bucket: "test-bucket",
+        region: "test-region",
+        encrypt: false,
+      };
+      const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
-    await push(config, stateDir, mockB2({ putObject }), logger);
+      await push(config, stateDir, mockB2({ putObject }), logger);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      "b2-backup: skipped path with ASCII control character: workspace/bad\\u007f.txt",
-    );
-    const uploadedKeys = putObject.mock.calls.map((call) => call[1]);
-    expect(uploadedKeys.some((key) => key.includes("\u007f"))).toBe(false);
-    await fs.promises.rm(stateDir, { recursive: true, force: true });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "b2-backup: skipped path with ASCII control character: workspace/bad\\u007f.txt",
+      );
+      const uploadedKeys = putObject.mock.calls.map((call) => call[1]);
+      expect(uploadedKeys.some((key) => key.includes("\u007f"))).toBe(false);
+    } finally {
+      await fs.promises.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("cleans temporary SQLite snapshot directories when upload fails", async () => {
