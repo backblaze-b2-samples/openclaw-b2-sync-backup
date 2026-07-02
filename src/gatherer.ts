@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GatheredFile } from "./types.js";
 
-type GatherLogger = {
+export type GatherLogger = {
   warn?: (msg: string) => void;
 };
 
