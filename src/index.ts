@@ -4,6 +4,7 @@ export { createDebounceGate } from "./debounce.js";
 export type { DebounceGate } from "./debounce.js";
 export { decrypt, deriveKey, encrypt, isEncrypted } from "./encryption.js";
 export { gatherFiles, shouldInclude } from "./gatherer.js";
+export type { GatherOptions } from "./gatherer.js";
 export { computeManifest, deserializeManifest, diffManifests, serializeManifest } from "./manifest.js";
 export type { ManifestDiff } from "./manifest.js";
 export { pullLatest, pullSnapshot } from "./pull.js";

@@ -2,6 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GatheredFile } from "./types.js";
 
+type GatherLogger = {
+  warn?: (msg: string) => void;
+};
+
+export type GatherOptions = {
+  logger?: GatherLogger;
+};
+
 const INCLUDE_PATTERNS = [
   /^openclaw\.json$/,
   /^openclaw\.json\.bak/,
@@ -33,9 +41,16 @@ function matchesAny(relativePath: string, patterns: RegExp[]): boolean {
 
 function hasAsciiControlChar(relativePath: string): boolean {
   for (let i = 0; i < relativePath.length; i += 1) {
-    if (relativePath.charCodeAt(i) < 32) return true;
+    const code = relativePath.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
   }
   return false;
+}
+
+function escapePathForDiagnostic(relativePath: string): string {
+  return relativePath.replace(/[\x00-\x1f\x7f]/g, (char) => {
+    return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
 }
 
 export function shouldInclude(relativePath: string): boolean {
@@ -44,13 +59,21 @@ export function shouldInclude(relativePath: string): boolean {
   return matchesAny(relativePath, INCLUDE_PATTERNS);
 }
 
-export async function gatherFiles(stateDir: string): Promise<GatheredFile[]> {
+export async function gatherFiles(
+  stateDir: string,
+  options: GatherOptions = {},
+): Promise<GatheredFile[]> {
   const results: GatheredFile[] = [];
-  await walkDir(stateDir, stateDir, results);
+  await walkDir(stateDir, stateDir, results, options);
   return results.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
-async function walkDir(base: string, dir: string, results: GatheredFile[]): Promise<void> {
+async function walkDir(
+  base: string,
+  dir: string,
+  results: GatheredFile[],
+  options: GatherOptions,
+): Promise<void> {
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -65,9 +88,15 @@ async function walkDir(base: string, dir: string, results: GatheredFile[]): Prom
       if (/^(credentials|media|extensions|node_modules)$/.test(rel.split(path.sep)[0] ?? "")) {
         continue;
       }
-      await walkDir(base, fullPath, results);
+      await walkDir(base, fullPath, results, options);
     } else if (entry.isFile()) {
       const relativePath = path.relative(base, fullPath).split(path.sep).join("/");
+      if (hasAsciiControlChar(relativePath)) {
+        options.logger?.warn?.(
+          `b2-backup: skipped path with ASCII control character: ${escapePathForDiagnostic(relativePath)}`,
+        );
+        continue;
+      }
       if (shouldInclude(relativePath)) {
         const stat = await fs.promises.stat(fullPath);
         results.push({
