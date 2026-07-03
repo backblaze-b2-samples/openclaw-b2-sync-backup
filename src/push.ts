@@ -7,6 +7,7 @@ import type { B2Client } from "./b2-client.js";
 import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
+import { isNodeError } from "./node-error.js";
 import { pruneSafetySnapshots, pruneSnapshots } from "./snapshots.js";
 import { snapshotSqlite } from "./sqlite-snapshot.js";
 import type { B2BackupConfig, BackupManifest } from "./types.js";
@@ -110,13 +111,13 @@ async function pushWithLock(
 
     // 3. Compute manifest (always on plaintext)
     const skippedMissingFiles = new Set<string>();
-    const skipMissingFile = (relativePath: string): void => {
-      skippedMissingFiles.add(relativePath);
+    const logMissingFile = (relativePath: string): void => {
       logger.debug?.(`b2-backup: skipped missing file ${relativePath}`);
     };
     const manifest = await computeManifest(files, {
       onMissingFile(file) {
-        skipMissingFile(file.relativePath);
+        skippedMissingFiles.add(file.relativePath);
+        logMissingFile(file.relativePath);
       },
     });
     files = files.filter((file) => !skippedMissingFiles.has(file.relativePath));
@@ -159,7 +160,7 @@ async function pushWithLock(
           } catch (err) {
             if (isNodeError(err, "ENOENT")) {
               delete manifest.files[relativePath];
-              skipMissingFile(relativePath);
+              logMissingFile(relativePath);
               return;
             }
             throw err;
@@ -290,8 +291,4 @@ function isProcessRunning(pid: number): boolean {
   } catch (err) {
     return !isNodeError(err, "ESRCH");
   }
-}
-
-function isNodeError(err: unknown, code: string): boolean {
-  return err instanceof Error && "code" in err && err.code === code;
 }
