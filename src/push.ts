@@ -7,6 +7,7 @@ import type { B2Client } from "./b2-client.js";
 import { encrypt } from "./encryption.js";
 import { gatherFiles } from "./gatherer.js";
 import { computeManifest, diffManifests, serializeManifest } from "./manifest.js";
+import { isNodeError } from "./node-error.js";
 import { pruneSafetySnapshots, pruneSnapshots } from "./snapshots.js";
 import { snapshotSqlite } from "./sqlite-snapshot.js";
 import type { B2BackupConfig, BackupManifest } from "./types.js";
@@ -92,7 +93,7 @@ async function pushWithLock(
   }
 
   // 1. Gather files
-  const files = await gatherFiles(stateDir);
+  let files = await gatherFiles(stateDir);
   if (files.length === 0) {
     logger.info("b2-backup: no files to sync");
     return;
@@ -109,7 +110,17 @@ async function pushWithLock(
     }
 
     // 3. Compute manifest (always on plaintext)
-    const manifest = await computeManifest(files);
+    const skippedMissingFiles = new Set<string>();
+    const logMissingFile = (relativePath: string): void => {
+      logger.debug?.(`b2-backup: skipped missing file ${relativePath}`);
+    };
+    const manifest = await computeManifest(files, {
+      onMissingFile(file) {
+        skippedMissingFiles.add(file.relativePath);
+        logMissingFile(file.relativePath);
+      },
+    });
+    files = files.filter((file) => !skippedMissingFiles.has(file.relativePath));
     const snapshotId = createSnapshotId(manifest.timestamp);
     // prefixOverride is already the full snapshot root used by safety snapshots.
     const snapshotRoot = options?.prefixOverride ?? `${prefix}/${snapshotId}`;
@@ -143,7 +154,17 @@ async function pushWithLock(
         batch.map(async (relativePath) => {
           const file = files.find((f) => f.relativePath === relativePath);
           if (!file) return;
-          const fileBody = await fs.promises.readFile(file.absolutePath);
+          let fileBody: Buffer;
+          try {
+            fileBody = await fs.promises.readFile(file.absolutePath);
+          } catch (err) {
+            if (isNodeError(err, "ENOENT")) {
+              delete manifest.files[relativePath];
+              logMissingFile(relativePath);
+              return;
+            }
+            throw err;
+          }
           const body = shouldEncrypt ? encrypt(fileBody, config.applicationKey) : fileBody;
           const key = `${snapshotRoot}/${relativePath}`;
           await b2.putObject(config.bucket, key, body, "application/octet-stream");
@@ -270,8 +291,4 @@ function isProcessRunning(pid: number): boolean {
   } catch (err) {
     return !isNodeError(err, "ESRCH");
   }
-}
-
-function isNodeError(err: unknown, code: string): boolean {
-  return err instanceof Error && "code" in err && err.code === code;
 }

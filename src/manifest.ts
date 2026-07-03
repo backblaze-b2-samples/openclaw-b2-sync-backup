@@ -1,11 +1,28 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { isNodeError } from "./node-error.js";
 import type { BackupManifest, GatheredFile } from "./types.js";
 
-export async function computeManifest(files: GatheredFile[]): Promise<BackupManifest> {
+export type ComputeManifestOptions = {
+  onMissingFile?: (file: GatheredFile) => void;
+};
+
+export async function computeManifest(
+  files: GatheredFile[],
+  options: ComputeManifestOptions = {},
+): Promise<BackupManifest> {
   const fileEntries: BackupManifest["files"] = {};
   for (const file of files) {
-    const hash = await hashFile(file.absolutePath);
+    let hash: string;
+    try {
+      hash = await hashFile(file.absolutePath);
+    } catch (err) {
+      if (options.onMissingFile && isNodeError(err, "ENOENT")) {
+        options.onMissingFile(file);
+        continue;
+      }
+      throw err;
+    }
     fileEntries[file.relativePath] = { hash, size: file.size };
   }
   return {
