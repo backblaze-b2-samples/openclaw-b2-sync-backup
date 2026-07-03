@@ -67,6 +67,72 @@ describe("push", () => {
     await fs.promises.rm(tempRoot, { recursive: true, force: true });
   });
 
+  it("skips files removed before upload", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const filePath = path.join(stateDir, "openclaw.json");
+    await fs.promises.writeFile(filePath, "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const putObject = vi.fn(async () => undefined);
+    const b2 = mockB2({ putObject });
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const readFile = fs.promises.readFile.bind(fs.promises);
+    const readSpy = vi.spyOn(fs.promises, "readFile").mockImplementation(async (file, options) => {
+      if (path.resolve(String(file)) === path.resolve(filePath)) {
+        const err = new Error("missing") as Error & { code: string };
+        err.code = "ENOENT";
+        throw err;
+      }
+      return readFile(file, options);
+    });
+
+    await push(config, stateDir, b2, logger);
+
+    const uploadedKeys = putObject.mock.calls.map((call) => call[1]);
+    expect(uploadedKeys).toHaveLength(1);
+    expect(uploadedKeys[0]).toMatch(/\/manifest\.json$/);
+    expect(uploadedKeys.some((key) => key.includes("openclaw.json"))).toBe(false);
+    expect(logger.debug).toHaveBeenCalledWith("b2-backup: skipped missing file openclaw.json");
+
+    readSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("propagates non-ENOENT read errors during upload", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
+    const filePath = path.join(stateDir, "openclaw.json");
+    await fs.promises.writeFile(filePath, "{}");
+    const config: ResolvedB2BackupConfig = {
+      keyId: "test-key",
+      applicationKey: "test-secret",
+      bucket: "test-bucket",
+      region: "test-region",
+      encrypt: false,
+    };
+    const b2 = mockB2();
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+    const readFile = fs.promises.readFile.bind(fs.promises);
+    const readSpy = vi.spyOn(fs.promises, "readFile").mockImplementation(async (file, options) => {
+      if (path.resolve(String(file)) === path.resolve(filePath)) {
+        const err = new Error("permission denied") as Error & { code: string };
+        err.code = "EACCES";
+        throw err;
+      }
+      return readFile(file, options);
+    });
+
+    await expect(push(config, stateDir, b2, logger)).rejects.toThrow("permission denied");
+
+    expect(b2.putObject).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+    await fs.promises.rm(stateDir, { recursive: true, force: true });
+  });
+
   it("rejects overlapping pushes with a lock diagnostic", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "b2-state-"));
     await fs.promises.writeFile(path.join(stateDir, "openclaw.json"), "{}");

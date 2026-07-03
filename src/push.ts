@@ -143,7 +143,16 @@ async function pushWithLock(
         batch.map(async (relativePath) => {
           const file = files.find((f) => f.relativePath === relativePath);
           if (!file) return;
-          const fileBody = await fs.promises.readFile(file.absolutePath);
+          let fileBody: Buffer;
+          try {
+            fileBody = await fs.promises.readFile(file.absolutePath);
+          } catch (err) {
+            if (isNodeError(err, "ENOENT")) {
+              logger.debug?.(`b2-backup: skipped missing file ${relativePath}`);
+              return;
+            }
+            throw err;
+          }
           const body = shouldEncrypt ? encrypt(fileBody, config.applicationKey) : fileBody;
           const key = `${snapshotRoot}/${relativePath}`;
           await b2.putObject(config.bucket, key, body, "application/octet-stream");
