@@ -92,7 +92,7 @@ async function pushWithLock(
   }
 
   // 1. Gather files
-  const files = await gatherFiles(stateDir);
+  let files = await gatherFiles(stateDir);
   if (files.length === 0) {
     logger.info("b2-backup: no files to sync");
     return;
@@ -109,7 +109,17 @@ async function pushWithLock(
     }
 
     // 3. Compute manifest (always on plaintext)
-    const manifest = await computeManifest(files);
+    const skippedMissingFiles = new Set<string>();
+    const skipMissingFile = (relativePath: string): void => {
+      skippedMissingFiles.add(relativePath);
+      logger.debug?.(`b2-backup: skipped missing file ${relativePath}`);
+    };
+    const manifest = await computeManifest(files, {
+      onMissingFile(file) {
+        skipMissingFile(file.relativePath);
+      },
+    });
+    files = files.filter((file) => !skippedMissingFiles.has(file.relativePath));
     const snapshotId = createSnapshotId(manifest.timestamp);
     // prefixOverride is already the full snapshot root used by safety snapshots.
     const snapshotRoot = options?.prefixOverride ?? `${prefix}/${snapshotId}`;
@@ -148,7 +158,8 @@ async function pushWithLock(
             fileBody = await fs.promises.readFile(file.absolutePath);
           } catch (err) {
             if (isNodeError(err, "ENOENT")) {
-              logger.debug?.(`b2-backup: skipped missing file ${relativePath}`);
+              delete manifest.files[relativePath];
+              skipMissingFile(relativePath);
               return;
             }
             throw err;

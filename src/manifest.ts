@@ -2,10 +2,26 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { BackupManifest, GatheredFile } from "./types.js";
 
-export async function computeManifest(files: GatheredFile[]): Promise<BackupManifest> {
+export type ComputeManifestOptions = {
+  onMissingFile?: (file: GatheredFile) => void;
+};
+
+export async function computeManifest(
+  files: GatheredFile[],
+  options: ComputeManifestOptions = {},
+): Promise<BackupManifest> {
   const fileEntries: BackupManifest["files"] = {};
   for (const file of files) {
-    const hash = await hashFile(file.absolutePath);
+    let hash: string;
+    try {
+      hash = await hashFile(file.absolutePath);
+    } catch (err) {
+      if (options.onMissingFile && isNodeError(err, "ENOENT")) {
+        options.onMissingFile(file);
+        continue;
+      }
+      throw err;
+    }
     fileEntries[file.relativePath] = { hash, size: file.size };
   }
   return {
@@ -65,6 +81,10 @@ async function hashFile(filePath: string): Promise<string> {
     stream.on("end", () => resolve(hash.digest("hex")));
     stream.on("error", reject);
   });
+}
+
+function isNodeError(err: unknown, code: string): boolean {
+  return err instanceof Error && "code" in err && err.code === code;
 }
 
 export { hashFile as _hashFile };
