@@ -407,7 +407,11 @@ export async function createB2Client(
       return false;
     }
 
-    const contentLength = Number(resp.headers.get("content-length"));
+    const contentLengthHeader = resp.headers.get("content-length");
+    if (contentLengthHeader === null) {
+      return false;
+    }
+    const contentLength = Number(contentLengthHeader);
     return (
       Number.isFinite(contentLength) &&
       contentLength === expectedSize &&

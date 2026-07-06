@@ -542,6 +542,49 @@ describe("createB2Client", () => {
     expect(fetchMock.mock.calls.map((call) => call[1]?.method)).toEqual(["PUT", "PUT", "HEAD"]);
   });
 
+  it("does not accept committed putObject verification without content-length", async () => {
+    let storedSha256 = "";
+    const fetchMock = vi.fn(async (url, init) => {
+      const requestUrl = new URL(String(url));
+      const headers = new Headers(init?.headers);
+      if (init?.method === "PUT" && !storedSha256) {
+        storedSha256 = headers.get("x-amz-meta-sha256") ?? "";
+        throw new TypeError("fetch failed");
+      }
+      if (init?.method === "PUT") {
+        return new Response("<Error><Code>PreconditionFailed</Code></Error>", { status: 412 });
+      }
+      if (init?.method === "HEAD") {
+        expect(requestUrl.pathname).toBe("/bucket/backup/empty.bin");
+        return new Response("", {
+          status: 200,
+          headers: {
+            "x-amz-meta-sha256": storedSha256,
+          },
+        });
+      }
+      throw new Error(`unexpected ${init?.method ?? "GET"} request`);
+    });
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0,
+      sleep,
+    });
+
+    await expect(
+      b2.putObject("bucket", "backup/empty.bin", Buffer.alloc(0), "application/octet-stream"),
+    ).rejects.toMatchObject({
+      name: "B2RequestError",
+      operation: "putObject",
+      status: 412,
+      code: "PreconditionFailed",
+    });
+    expect(fetchMock.mock.calls.map((call) => call[1]?.method)).toEqual(["PUT", "PUT", "HEAD"]);
+  });
+
   it("bounds 400 IncompleteBody classification for oversized bodies", async () => {
     const encoder = new TextEncoder();
     let pulls = 0;
