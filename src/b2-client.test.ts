@@ -411,6 +411,28 @@ describe("createB2Client", () => {
     expect(sleep).toHaveBeenCalledWith(2_400);
   });
 
+  it("does not jitter Retry-After below the server delay", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 503, headers: { "retry-after": "2" } }),
+      )
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0.25,
+      random: () => 0,
+      sleep,
+    });
+
+    await b2.headBucket("bucket");
+
+    expect(sleep).toHaveBeenCalledWith(2_000);
+  });
+
   it("retries putObject transient failures with the default six attempts", async () => {
     const fetchMock = vi
       .fn()
@@ -468,6 +490,58 @@ describe("createB2Client", () => {
     expect(sleep).toHaveBeenCalledWith(1);
   });
 
+  it("treats an already-committed conditional putObject retry as success", async () => {
+    const storedVersions: Array<{ key: string; size: number; sha256: string }> = [];
+    const fetchMock = vi.fn(async (url, init) => {
+      const requestUrl = new URL(String(url));
+      const headers = new Headers(init?.headers);
+      if (init?.method === "PUT") {
+        expect(headers.get("if-none-match")).toBe("*");
+        const existing = storedVersions.find((version) => version.key === requestUrl.pathname);
+        if (!existing) {
+          storedVersions.push({
+            key: requestUrl.pathname,
+            size: (init.body as Uint8Array).byteLength,
+            sha256: headers.get("x-amz-meta-sha256") ?? "",
+          });
+          throw new TypeError("fetch failed");
+        }
+        return new Response("<Error><Code>PreconditionFailed</Code></Error>", { status: 412 });
+      }
+      if (init?.method === "HEAD") {
+        const existing = storedVersions.find((version) => version.key === requestUrl.pathname);
+        return new Response("", {
+          status: existing ? 200 : 404,
+          headers: existing
+            ? {
+                "content-length": String(existing.size),
+                "x-amz-meta-sha256": existing.sha256,
+              }
+            : undefined,
+        });
+      }
+      throw new Error(`unexpected ${init?.method ?? "GET"} request`);
+    });
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0,
+      sleep,
+    });
+
+    await b2.putObject(
+      "bucket",
+      "backup/file.bin",
+      Buffer.from("body"),
+      "application/octet-stream",
+    );
+
+    expect(storedVersions).toHaveLength(1);
+    expect(fetchMock.mock.calls.map((call) => call[1]?.method)).toEqual(["PUT", "PUT", "HEAD"]);
+  });
+
   it("bounds 400 IncompleteBody classification for oversized bodies", async () => {
     const encoder = new TextEncoder();
     let pulls = 0;
@@ -512,6 +586,68 @@ describe("createB2Client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(pulls).toBeLessThan(8);
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it("does not retry oversized 400 bodies with IncompleteBody outside the bounded prefix", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    const cancel = vi.fn();
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 10) {
+          controller.enqueue(
+            encoder.encode("<Error><Code>IncompleteBody</Code><Message>late</Message></Error>"),
+          );
+          return;
+        }
+        if (pulls <= 256) {
+          controller.enqueue(encoder.encode("x".repeat(1024)));
+          return;
+        }
+        controller.close();
+      },
+      cancel,
+    });
+    const fetchMock = vi.fn(async () => new Response(oversizedBody, { status: 400 }));
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0,
+      sleep,
+    });
+
+    await expect(
+      b2.putObject("bucket", "backup/file.bin", Buffer.from("body"), "application/octet-stream"),
+    ).rejects.toThrow(B2RequestError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(pulls).toBeLessThan(128);
+    expect(cancel).toHaveBeenCalled();
+  });
+
+  it("does not retry 400 IncompleteBody responses for non-upload operations", async () => {
+    const body = "<Error><Code>IncompleteBody</Code><Message>short body</Message></Error>";
+    const fetchMock = vi.fn(async () => new Response(body, { status: 400 }));
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0,
+      sleep,
+    });
+
+    await expect(b2.getObject("bucket", "backup/file.bin")).rejects.toMatchObject({
+      name: "B2RequestError",
+      operation: "getObject",
+      status: 400,
+      code: "IncompleteBody",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("does not retry putObject logical 400 errors", async () => {

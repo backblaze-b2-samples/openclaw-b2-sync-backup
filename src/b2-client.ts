@@ -7,6 +7,7 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 15_000;
 const DEFAULT_RETRY_JITTER_RATIO = 0.25;
 const S3_ERROR_CODE_READ_LIMIT_BYTES = 4_096;
+const B2_ERROR_BODY_READ_LIMIT_BYTES = 64 * 1_024;
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -79,6 +80,7 @@ type RequestContext = {
   bucket: string;
   key?: string;
   prefix?: string;
+  retryResponse?: (resp: Response) => Promise<RetryDecision | undefined>;
 };
 
 type RetryDecision = {
@@ -213,18 +215,37 @@ export async function createB2Client(
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
+      const bodyBytes = new Uint8Array(body);
+      const bodySha256 = sha256Hex(bodyBytes);
+      const headers = sign(
+        "PUT",
+        path,
+        {
+          host: endpointHost,
+          "content-type": contentType,
+          "if-none-match": "*",
+          "x-amz-meta-sha256": bodySha256,
+        },
+        bodyBytes,
+      );
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
         {
           method: "PUT",
           headers,
-          body: new Uint8Array(body),
+          body: bodyBytes,
         },
-        { operation: "putObject", bucket, key },
+        { operation: "putObject", bucket, key, retryResponse: retryPutObjectResponse },
         clientOptions,
       );
       if (!resp.ok) {
+        if (
+          resp.status === 412 &&
+          (await headObjectMatchesExpected(bucket, key, bodyBytes.byteLength, bodySha256))
+        ) {
+          await resp.body?.cancel().catch(() => undefined);
+          return;
+        }
         await throwB2RequestError(resp, "putObject");
       }
     },
@@ -361,12 +382,43 @@ export async function createB2Client(
     },
   };
 
+  async function headObjectMatchesExpected(
+    bucket: string,
+    key: string,
+    expectedSize: number,
+    expectedSha256: string,
+  ): Promise<boolean> {
+    const path = `/${bucket}/${key}`;
+    const headers = sign("HEAD", path, { host: endpointHost });
+    const resp = await fetchWithRetry(
+      `${resolvedEndpoint}${path}`,
+      {
+        method: "HEAD",
+        headers,
+      },
+      { operation: "headObject", bucket, key },
+      clientOptions,
+    );
+    await resp.body?.cancel().catch(() => undefined);
+    if (!resp.ok) {
+      return false;
+    }
+
+    const contentLength = Number(resp.headers.get("content-length"));
+    return (
+      Number.isFinite(contentLength) &&
+      contentLength === expectedSize &&
+      resp.headers.get("x-amz-meta-sha256") === expectedSha256
+    );
+  }
+
   return client;
 }
 
 async function throwB2RequestError(resp: Response, operation: string): Promise<never> {
-  const body = await resp.text().catch(() => "");
-  throw new B2RequestError(operation, resp.status, body, parseS3ErrorCode(body));
+  const { text, truncated } = await readResponseTextPrefix(resp, B2_ERROR_BODY_READ_LIMIT_BYTES);
+  const body = truncated ? `${text}\n[truncated]` : text;
+  throw new B2RequestError(operation, resp.status, body, parseS3ErrorCode(text));
 }
 
 function parseS3ErrorCode(body: string): string | undefined {
@@ -520,7 +572,7 @@ async function fetchWithRetry(
     try {
       const resp = await fetch(url, { ...init, signal });
       const elapsedMs = Date.now() - startedAt;
-      const retryDecision = await retryableResponseDecision(resp);
+      const retryDecision = await retryableResponseDecision(resp, context);
       const status = retryDecision?.status ?? String(resp.status);
       logAttempt(options, context, attempt, maxAttempts, status, elapsedMs);
 
@@ -599,10 +651,31 @@ function retryDelayMs(
   const selectedDelay = retryAfterMs ?? options.retryBaseDelayMs * 2 ** (attempt - 1);
   const random = options.random ?? Math.random;
   const jitteredDelay =
-    options.retryJitterMs === undefined
-      ? applyRatioJitter(selectedDelay, options.retryJitterRatio, random)
-      : selectedDelay + Math.floor(random() * options.retryJitterMs);
+    retryAfterMs === undefined
+      ? applyRetryJitter(selectedDelay, options, random)
+      : applyRetryAfterJitter(selectedDelay, options, random);
   return Math.min(options.retryMaxDelayMs, Math.max(0, Math.floor(jitteredDelay)));
+}
+
+function applyRetryJitter(
+  delayMs: number,
+  options: NormalizedB2ClientOptions,
+  random: () => number,
+): number {
+  return options.retryJitterMs === undefined
+    ? applyRatioJitter(delayMs, options.retryJitterRatio, random)
+    : delayMs + Math.floor(random() * options.retryJitterMs);
+}
+
+function applyRetryAfterJitter(
+  delayMs: number,
+  options: NormalizedB2ClientOptions,
+  random: () => number,
+): number {
+  if (options.retryJitterMs !== undefined) {
+    return delayMs + Math.floor(random() * options.retryJitterMs);
+  }
+  return delayMs + random() * delayMs * options.retryJitterRatio;
 }
 
 function applyRatioJitter(delayMs: number, ratio: number, random: () => number): number {
@@ -671,35 +744,57 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("b2 request aborted");
 }
 
-async function retryableResponseDecision(resp: Response): Promise<RetryDecision | undefined> {
+async function retryableResponseDecision(
+  resp: Response,
+  context: RequestContext,
+): Promise<RetryDecision | undefined> {
   if (resp.status === 408 || resp.status === 429 || resp.status >= 500) {
     return {
       status: String(resp.status),
       retryAfterMs: retryAfterDelayMs(resp),
     };
   }
+
+  return context.retryResponse?.(resp);
+}
+
+async function retryPutObjectResponse(resp: Response): Promise<RetryDecision | undefined> {
   if (resp.status !== 400) {
     return undefined;
   }
 
-  const code = await readS3ErrorCodePrefix(resp.clone(), S3_ERROR_CODE_READ_LIMIT_BYTES);
+  const code = await readS3ErrorCode(resp.clone(), S3_ERROR_CODE_READ_LIMIT_BYTES);
   return code === "IncompleteBody" ? { status: "400 IncompleteBody" } : undefined;
 }
 
-async function readS3ErrorCodePrefix(resp: Response, maxBytes: number): Promise<string | undefined> {
+async function readS3ErrorCode(resp: Response, maxBytes: number): Promise<string | undefined> {
+  const { text } = await readResponseTextPrefix(resp, maxBytes, (bodyPrefix) =>
+    parseS3ErrorCode(bodyPrefix) !== undefined,
+  );
+  return parseS3ErrorCode(text);
+}
+
+async function readResponseTextPrefix(
+  resp: Response,
+  maxBytes: number,
+  shouldStop?: (text: string) => boolean,
+): Promise<{ text: string; truncated: boolean }> {
   if (!resp.body || maxBytes <= 0) {
-    return undefined;
+    return { text: "", truncated: false };
   }
 
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let text = "";
   let bytesRead = 0;
+  let doneReading = false;
+  let truncated = false;
 
   try {
     while (bytesRead < maxBytes) {
       const { done, value } = await reader.read();
       if (done) {
+        doneReading = true;
         break;
       }
 
@@ -708,20 +803,27 @@ async function readS3ErrorCodePrefix(resp: Response, maxBytes: number): Promise<
       bytesRead += chunk.byteLength;
       text += decoder.decode(chunk, { stream: true });
 
-      const code = parseS3ErrorCode(text);
-      if (code || chunk.byteLength < value.byteLength) {
-        return code;
+      if (shouldStop?.(text)) {
+        truncated = true;
+        break;
+      }
+      if (chunk.byteLength < value.byteLength) {
+        truncated = true;
+        break;
       }
     }
   } catch {
-    return undefined;
+    return { text, truncated: true };
   } finally {
-    void reader.cancel().catch(() => undefined);
+    if (!doneReading) {
+      truncated = true;
+      void reader.cancel().catch(() => undefined);
+    }
     reader.releaseLock();
   }
 
   text += decoder.decode();
-  return parseS3ErrorCode(text);
+  return { text, truncated };
 }
 
 function retryAfterDelayMs(resp: Response): number | undefined {
