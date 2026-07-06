@@ -358,6 +358,23 @@ describe("createB2Client", () => {
     );
   });
 
+  it("does not use conditional putObject headers by default", async () => {
+    const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region");
+
+    await b2.putObject(
+      "bucket",
+      "backup/file.bin",
+      Buffer.from("body"),
+      "application/octet-stream",
+    );
+
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("if-none-match")).toBeNull();
+    expect(headers.get("x-amz-meta-sha256")).toBeNull();
+  });
+
   it("throws structured request errors with S3 error codes", async () => {
     const body = "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 404 })));
@@ -492,6 +509,7 @@ describe("createB2Client", () => {
     const sleep = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
     const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      conditionalPutObject: true,
       maxRetries: 1,
       retryBaseDelayMs: 1,
       retryJitterRatio: 0,
@@ -544,6 +562,7 @@ describe("createB2Client", () => {
     const sleep = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
     const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      conditionalPutObject: true,
       maxRetries: 1,
       retryBaseDelayMs: 1,
       retryJitterRatio: 0,
@@ -587,6 +606,7 @@ describe("createB2Client", () => {
     const sleep = vi.fn(async () => undefined);
     vi.stubGlobal("fetch", fetchMock);
     const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      conditionalPutObject: true,
       maxRetries: 1,
       retryBaseDelayMs: 1,
       retryJitterRatio: 0,

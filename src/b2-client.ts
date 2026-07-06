@@ -35,6 +35,8 @@ export type B2ClientLogger = {
 export type B2ClientOptions = {
   endpoint?: string;
   logger?: B2ClientLogger;
+  /** Use create-only PUTs and verify matching objects after ambiguous upload failures. */
+  conditionalPutObject?: boolean;
   requestTimeoutMs?: number;
   maxRetries?: number;
   retryBaseDelayMs?: number;
@@ -73,7 +75,12 @@ export class B2RequestError extends Error {
 type NormalizedB2ClientOptions = Required<
   Pick<
     B2ClientOptions,
-    "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryMaxDelayMs" | "retryJitterRatio"
+    | "conditionalPutObject"
+    | "requestTimeoutMs"
+    | "maxRetries"
+    | "retryBaseDelayMs"
+    | "retryMaxDelayMs"
+    | "retryJitterRatio"
   >
 > &
   Pick<B2ClientOptions, "endpoint" | "logger" | "signal" | "random" | "retryJitterMs" | "sleep">;
@@ -222,16 +229,19 @@ export async function createB2Client(
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
       const bodyBytes = body;
-      const bodySha256 = sha256Hex(bodyBytes);
+      const bodySha256 = clientOptions.conditionalPutObject ? sha256Hex(bodyBytes) : undefined;
+      const putHeaders: Record<string, string> = {
+        host: endpointHost,
+        "content-type": contentType,
+      };
+      if (clientOptions.conditionalPutObject) {
+        putHeaders["if-none-match"] = "*";
+        putHeaders["x-amz-meta-sha256"] = bodySha256!;
+      }
       const headers = sign(
         "PUT",
         path,
-        {
-          host: endpointHost,
-          "content-type": contentType,
-          "if-none-match": "*",
-          "x-amz-meta-sha256": bodySha256,
-        },
+        putHeaders,
         bodyBytes,
         undefined,
         bodySha256,
@@ -248,8 +258,9 @@ export async function createB2Client(
       );
       if (!resp.ok) {
         if (
+          clientOptions.conditionalPutObject &&
           resp.status === 412 &&
-          (await headObjectMatchesExpected(bucket, key, bodyBytes.byteLength, bodySha256))
+          (await headObjectMatchesExpected(bucket, key, bodyBytes.byteLength, bodySha256!))
         ) {
           await resp.body?.cancel().catch(() => undefined);
           return;
@@ -456,6 +467,7 @@ function normalizeClientOptions(
   return {
     endpoint: merged.endpoint,
     logger: merged.logger,
+    conditionalPutObject: merged.conditionalPutObject ?? false,
     signal: merged.signal,
     random: merged.random,
     sleep: merged.sleep,

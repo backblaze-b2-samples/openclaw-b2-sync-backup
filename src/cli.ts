@@ -208,6 +208,7 @@ export async function runCli(argv: string[], deps: CliDeps = {}): Promise<CliRes
       {
         endpoint: context.config.endpoint,
         logger,
+        ...(options.dryRun ? {} : { conditionalPutObject: true }),
       },
     );
 

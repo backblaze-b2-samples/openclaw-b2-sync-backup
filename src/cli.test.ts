@@ -198,6 +198,7 @@ describe("openclaw-b2-backup-push CLI", () => {
 
     expect(result.exitCode).toBe(EXIT_CODES.success);
     expect(createB2).toHaveBeenCalledWith("key-id", "app-key", "us-west-004", {
+      conditionalPutObject: true,
       endpoint: undefined,
       logger: expect.any(Object),
     });
@@ -232,6 +233,7 @@ describe("openclaw-b2-backup-push CLI", () => {
 
     expect(result.exitCode).toBe(EXIT_CODES.success);
     expect(createB2).toHaveBeenCalledWith("env-key", "env-secret", "env-region", {
+      conditionalPutObject: true,
       endpoint: undefined,
       logger: expect.any(Object),
     });
