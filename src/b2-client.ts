@@ -6,6 +6,7 @@ const DEFAULT_MAX_RETRIES = 5;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_RETRY_MAX_DELAY_MS = 15_000;
 const DEFAULT_RETRY_JITTER_RATIO = 0.25;
+const S3_ERROR_CODE_READ_LIMIT_BYTES = 4_096;
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -37,7 +38,9 @@ export type B2ClientOptions = {
   maxRetries?: number;
   retryBaseDelayMs?: number;
   retryMaxDelayMs?: number;
+  /** Absolute additive jitter in milliseconds. Mutually exclusive with retryJitterRatio. */
   retryJitterMs?: number;
+  /** Fractional jitter around the selected retry delay. Mutually exclusive with retryJitterMs. */
   retryJitterRatio?: number;
   signal?: AbortSignal;
   random?: () => number;
@@ -76,6 +79,11 @@ type RequestContext = {
   bucket: string;
   key?: string;
   prefix?: string;
+};
+
+type RetryDecision = {
+  status: string;
+  retryAfterMs?: number;
 };
 
 type S3SignParams = {
@@ -377,6 +385,10 @@ function normalizeClientOptions(
     endpoint: options?.endpoint ?? endpoint,
   };
 
+  if (merged.retryJitterMs !== undefined && merged.retryJitterRatio !== undefined) {
+    throw new B2ConfigError("b2: retryJitterMs and retryJitterRatio are mutually exclusive");
+  }
+
   return {
     endpoint: merged.endpoint,
     logger: merged.logger,
@@ -508,16 +520,16 @@ async function fetchWithRetry(
     try {
       const resp = await fetch(url, { ...init, signal });
       const elapsedMs = Date.now() - startedAt;
-      const retryableStatus = await retryableResponseStatus(resp);
-      const status = retryableStatus ?? String(resp.status);
+      const retryDecision = await retryableResponseDecision(resp);
+      const status = retryDecision?.status ?? String(resp.status);
       logAttempt(options, context, attempt, maxAttempts, status, elapsedMs);
 
-      if (!retryableStatus || attempt === maxAttempts) {
+      if (!retryDecision || attempt === maxAttempts) {
         return resp;
       }
 
       await resp.body?.cancel().catch(() => undefined);
-      await waitBeforeRetry(options, context, attempt, maxAttempts, status, elapsedMs);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, retryDecision, elapsedMs);
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
       const status = options.signal?.aborted ? "aborted" : signal.aborted ? "timeout" : "network-error";
@@ -528,7 +540,7 @@ async function fetchWithRetry(
         throw err;
       }
 
-      await waitBeforeRetry(options, context, attempt, maxAttempts, status, elapsedMs);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, { status }, elapsedMs);
     } finally {
       cleanup();
     }
@@ -566,26 +578,30 @@ async function waitBeforeRetry(
   context: RequestContext,
   attempt: number,
   maxAttempts: number,
-  status: string,
+  retryDecision: RetryDecision,
   elapsedMs: number,
 ): Promise<void> {
   if (options.signal?.aborted) {
     throw abortReason(options.signal);
   }
-  const delayMs = retryDelayMs(options, attempt);
+  const delayMs = retryDelayMs(options, attempt, retryDecision.retryAfterMs);
   options.logger?.warn?.(
-    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
+    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${retryDecision.status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
   );
   await sleepWithSignal(delayMs, options.signal, options.sleep);
 }
 
-function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): number {
-  const exponentialDelay = options.retryBaseDelayMs * 2 ** (attempt - 1);
+function retryDelayMs(
+  options: NormalizedB2ClientOptions,
+  attempt: number,
+  retryAfterMs?: number,
+): number {
+  const selectedDelay = retryAfterMs ?? options.retryBaseDelayMs * 2 ** (attempt - 1);
   const random = options.random ?? Math.random;
   const jitteredDelay =
     options.retryJitterMs === undefined
-      ? applyRatioJitter(exponentialDelay, options.retryJitterRatio, random)
-      : exponentialDelay + Math.floor(random() * options.retryJitterMs);
+      ? applyRatioJitter(selectedDelay, options.retryJitterRatio, random)
+      : selectedDelay + Math.floor(random() * options.retryJitterMs);
   return Math.min(options.retryMaxDelayMs, Math.max(0, Math.floor(jitteredDelay)));
 }
 
@@ -655,20 +671,79 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("b2 request aborted");
 }
 
-async function retryableResponseStatus(resp: Response): Promise<string | undefined> {
+async function retryableResponseDecision(resp: Response): Promise<RetryDecision | undefined> {
   if (resp.status === 408 || resp.status === 429 || resp.status >= 500) {
-    return String(resp.status);
+    return {
+      status: String(resp.status),
+      retryAfterMs: retryAfterDelayMs(resp),
+    };
   }
   if (resp.status !== 400) {
     return undefined;
   }
 
-  const body = await resp
-    .clone()
-    .text()
-    .catch(() => "");
-  const code = parseS3ErrorCode(body);
-  return code === "IncompleteBody" ? "400 IncompleteBody" : undefined;
+  const code = await readS3ErrorCodePrefix(resp.clone(), S3_ERROR_CODE_READ_LIMIT_BYTES);
+  return code === "IncompleteBody" ? { status: "400 IncompleteBody" } : undefined;
+}
+
+async function readS3ErrorCodePrefix(resp: Response, maxBytes: number): Promise<string | undefined> {
+  if (!resp.body || maxBytes <= 0) {
+    return undefined;
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+
+  try {
+    while (bytesRead < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      const remainingBytes = maxBytes - bytesRead;
+      const chunk = value.subarray(0, remainingBytes);
+      bytesRead += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+
+      const code = parseS3ErrorCode(text);
+      if (code || chunk.byteLength < value.byteLength) {
+        return code;
+      }
+    }
+  } catch {
+    return undefined;
+  } finally {
+    void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  text += decoder.decode();
+  return parseS3ErrorCode(text);
+}
+
+function retryAfterDelayMs(resp: Response): number | undefined {
+  if (resp.status !== 429 && resp.status !== 503) {
+    return undefined;
+  }
+
+  const value = resp.headers.get("retry-after")?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(value)) {
+    return Number(value) * 1_000;
+  }
+
+  const retryAtMs = Date.parse(value);
+  if (!Number.isFinite(retryAtMs)) {
+    return undefined;
+  }
+
+  return Math.max(0, retryAtMs - Date.now());
 }
 
 function logAttempt(

@@ -299,6 +299,15 @@ describe("createB2Client", () => {
     );
   });
 
+  it("rejects ambiguous retry jitter options", async () => {
+    await expect(
+      createB2Client("004test", "K004secret", "test-region", {
+        retryJitterMs: 10,
+        retryJitterRatio: 0.1,
+      }),
+    ).rejects.toThrow("retryJitterMs and retryJitterRatio are mutually exclusive");
+  });
+
   it("rejects invalid endpoint options with a typed config error", async () => {
     await expect(
       createB2Client("004test", "K004secret", "test-region", {
@@ -378,6 +387,30 @@ describe("createB2Client", () => {
     );
   });
 
+  it("honors Retry-After before local exponential backoff, jitter, and cap", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response("slow down", { status: 429, headers: { "retry-after": "2" } }),
+      )
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0.25,
+      retryMaxDelayMs: 2_400,
+      random: () => 1,
+      sleep,
+    });
+
+    await b2.headBucket("bucket");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(2_400);
+  });
+
   it("retries putObject transient failures with the default six attempts", async () => {
     const fetchMock = vi
       .fn()
@@ -433,6 +466,52 @@ describe("createB2Client", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledWith(1);
+  });
+
+  it("bounds 400 IncompleteBody classification for oversized bodies", async () => {
+    const encoder = new TextEncoder();
+    let pulls = 0;
+    const cancel = vi.fn();
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          controller.enqueue(
+            encoder.encode("<Error><Code>IncompleteBody</Code><Message>short</Message></Error>"),
+          );
+          return;
+        }
+        if (pulls <= 128) {
+          controller.enqueue(encoder.encode("x".repeat(1024)));
+          return;
+        }
+        controller.close();
+      },
+      cancel,
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(oversizedBody, { status: 400 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }));
+    const sleep = vi.fn(async () => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client("004test", "K004secret", "test-region", {
+      maxRetries: 1,
+      retryBaseDelayMs: 1,
+      retryJitterRatio: 0,
+      sleep,
+    });
+
+    await b2.putObject(
+      "bucket",
+      "backup/file.bin",
+      Buffer.from("body"),
+      "application/octet-stream",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(pulls).toBeLessThan(8);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("does not retry putObject logical 400 errors", async () => {
