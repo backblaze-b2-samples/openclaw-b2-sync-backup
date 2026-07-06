@@ -41,7 +41,10 @@ export type B2ClientOptions = {
   retryMaxDelayMs?: number;
   /** Absolute additive jitter in milliseconds. Mutually exclusive with retryJitterRatio. */
   retryJitterMs?: number;
-  /** Fractional jitter around the selected retry delay. Mutually exclusive with retryJitterMs. */
+  /**
+   * Fractional jitter around local retry delays.
+   * Retry-After jitter is additive only. Mutually exclusive with retryJitterMs.
+   */
   retryJitterRatio?: number;
   signal?: AbortSignal;
   random?: () => number;
@@ -215,7 +218,7 @@ export async function createB2Client(
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
-      const bodyBytes = new Uint8Array(body);
+      const bodyBytes = body;
       const bodySha256 = sha256Hex(bodyBytes);
       const headers = sign(
         "PUT",
@@ -233,7 +236,7 @@ export async function createB2Client(
         {
           method: "PUT",
           headers,
-          body: bodyBytes,
+          body: bodyBytes as BodyInit,
         },
         { operation: "putObject", bucket, key, retryResponse: retryPutObjectResponse },
         clientOptions,
