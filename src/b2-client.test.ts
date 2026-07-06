@@ -102,6 +102,25 @@ describe("b2-client Sig V4 signing", () => {
     }
   });
 
+  it("uses a precomputed payload hash when provided", () => {
+    const payloadHash = "a".repeat(64);
+    const headers = signRequest({
+      method: "PUT",
+      path: "/my-bucket/upload",
+      headers: {
+        host: "s3.test-region.backblazeb2.com",
+        "content-type": "application/octet-stream",
+      },
+      body: Buffer.from("hash would differ"),
+      payloadHash,
+      region: "test-region",
+      accessKeyId: "004test",
+      secretAccessKey: "K004secret",
+    });
+
+    expect(headers["x-amz-content-sha256"]).toBe(payloadHash);
+  });
+
   it("sorts headers for canonical request", () => {
     const originalDate = globalThis.Date;
     globalThis.Date = class extends originalDate {

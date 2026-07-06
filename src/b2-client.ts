@@ -97,6 +97,7 @@ type S3SignParams = {
   query?: Record<string, string>;
   headers: Record<string, string>;
   body: Uint8Array | "";
+  payloadHash?: string;
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
@@ -129,7 +130,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256Hex(body);
+  const payloadHash = params.payloadHash ?? sha256Hex(body);
 
   const signedHeaders = { ...headers };
   signedHeaders["x-amz-date"] = amzDate;
@@ -203,6 +204,7 @@ export async function createB2Client(
     headers: Record<string, string>,
     body: Uint8Array | "" = "",
     query?: Record<string, string>,
+    payloadHash?: string,
   ) =>
     signRequest({
       method,
@@ -210,6 +212,7 @@ export async function createB2Client(
       query,
       headers: { ...headers, "user-agent": USER_AGENT },
       body,
+      payloadHash,
       region: resolvedRegion,
       accessKeyId: keyId,
       secretAccessKey: applicationKey,
@@ -230,6 +233,8 @@ export async function createB2Client(
           "x-amz-meta-sha256": bodySha256,
         },
         bodyBytes,
+        undefined,
+        bodySha256,
       );
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
