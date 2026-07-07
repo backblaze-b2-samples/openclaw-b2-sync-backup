@@ -251,7 +251,10 @@ describe("parseListObjectsResponse", () => {
         &lt;&gt;&quot;&apos;&#43;
       </NextContinuationToken>
       <Contents>
-        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
+        <Key>
+          snapshot/a&amp;
+          &lt;&gt;&quot;&apos;.txt
+        </Key>
         <Size>100</Size>
         <LastModified>2026-01-01</LastModified>
       </Contents>
