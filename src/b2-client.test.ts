@@ -243,6 +243,23 @@ describe("parseListObjectsResponse", () => {
     expect(page.nextToken).toBe("abc123");
   });
 
+  it("decodes XML entities in keys, common prefixes, and continuation tokens", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>token&amp;&lt;&gt;&quot;&apos;&#43;</NextContinuationToken>
+      <Contents>
+        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
+        <Size>100</Size>
+        <LastModified>2026-01-01</LastModified>
+      </Contents>
+      <CommonPrefixes><Prefix>snapshot/a&amp;&lt;&gt;&quot;&apos;/</Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe(`snapshot/a&<>"'.txt`);
+    expect(page.prefixes).toEqual([`snapshot/a&<>"'/`]);
+    expect(page.nextToken).toBe(`token&<>"'+`);
+  });
+
   it("returns no nextToken when not truncated", () => {
     const xml = `<ListBucketResult>
       <IsTruncated>false</IsTruncated>
@@ -405,6 +422,39 @@ describe("createB2Client", () => {
     } finally {
       globalThis.Date = originalDate;
     }
+  });
+
+  it("uses decoded list result keys when deleting retained objects", async () => {
+    const key = `snapshot/a&<>"'.txt`;
+    const listXml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents>
+        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
+        <Size>2</Size>
+        <LastModified>2026-01-01</LastModified>
+      </Contents>
+    </ListBucketResult>`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(listXml, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    const objects = await b2.listObjects("bucket", "snapshot/");
+    await b2.deleteObject("bucket", objects[0]!.key);
+
+    expect(objects[0]?.key).toBe(key);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://s3.test-region.backblazeb2.com/bucket/snapshot/a%26%3C%3E%22%27.txt",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 
   it("throws structured request errors with S3 error codes", async () => {

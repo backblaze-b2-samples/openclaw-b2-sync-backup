@@ -103,6 +103,10 @@ function s3EncodePath(key: string): string {
     .join("/");
 }
 
+function buildObjectPath(bucket: string, key: string): string {
+  return `/${bucket}/${s3EncodePath(key)}`;
+}
+
 function getSignatureKey(
   secretKey: string,
   dateStamp: string,
@@ -210,7 +214,7 @@ export async function createB2Client(
 
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
-      const path = `/${bucket}/${s3EncodePath(key)}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -228,7 +232,7 @@ export async function createB2Client(
     },
 
     async getObject(bucket, key) {
-      const path = `/${bucket}/${s3EncodePath(key)}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("GET", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -325,7 +329,7 @@ export async function createB2Client(
     },
 
     async deleteObject(bucket, key) {
-      const path = `/${bucket}/${s3EncodePath(key)}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("DELETE", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -665,7 +669,7 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   let match: RegExpExecArray | null;
   while ((match = contentRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const key = block.match(/<Key>(.*?)<\/Key>/)?.[1] ?? "";
+    const key = decodeXmlEntities(block.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] ?? "");
     const size = Number(block.match(/<Size>(.*?)<\/Size>/)?.[1] ?? "0");
     const lastModified = block.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] ?? "";
     entries.push({ key, size, lastModified });
@@ -675,7 +679,9 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = normalizeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "");
+    const prefix = decodeXmlEntities(
+      normalizeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? ""),
+    );
     if (prefix) {
       prefixes.push(prefix);
     }
@@ -683,10 +689,42 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
 
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
   const nextToken = isTruncated
-    ? xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1]
+    ? decodeOptionalXmlText(xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/)?.[1])
     : undefined;
 
   return { entries, prefixes, nextToken };
+}
+
+function decodeOptionalXmlText(text: string | undefined): string | undefined {
+  return text === undefined ? undefined : decodeXmlEntities(text);
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: '"',
+};
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#(?:[xX][0-9a-fA-F]+|\d+)|[a-zA-Z][a-zA-Z0-9]+);/g, (entity, body) => {
+    if (body.startsWith("#x") || body.startsWith("#X")) {
+      return decodeXmlCodePoint(entity, Number.parseInt(body.slice(2), 16));
+    }
+    if (body.startsWith("#")) {
+      return decodeXmlCodePoint(entity, Number.parseInt(body.slice(1), 10));
+    }
+    return XML_ENTITIES[body] ?? entity;
+  });
+}
+
+function decodeXmlCodePoint(entity: string, codePoint: number): string {
+  try {
+    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+  } catch {
+    return entity;
+  }
 }
 
 function normalizeXmlText(text: string): string {
