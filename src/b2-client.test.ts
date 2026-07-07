@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   _parseListObjectsResponse as parseListObjectsResponse,
   _resolveEndpoint as resolveEndpoint,
+  _s3EncodePath as s3EncodePath,
   _signRequest as signRequest,
   B2ConfigError,
   B2RequestError,
@@ -203,6 +204,17 @@ describe("b2-client Sig V4 signing", () => {
   });
 });
 
+describe("s3EncodePath", () => {
+  it("encodes object key segments with S3 Sig V4 path rules", () => {
+    expect(s3EncodePath("workspace/Marketing Image's (final)!*+.png")).toBe(
+      "workspace/Marketing%20Image%27s%20%28final%29%21%2A%2B.png",
+    );
+    expect(s3EncodePath("nested//already%encoded/~safe")).toBe(
+      "nested//already%25encoded/~safe",
+    );
+  });
+});
+
 describe("parseListObjectsResponse", () => {
   it("parses entries from XML", () => {
     const xml = `<ListBucketResult>
@@ -326,6 +338,73 @@ describe("createB2Client", () => {
         }),
       }),
     );
+  });
+
+  it("uses the S3-encoded object path for both fetch and signing", async () => {
+    const fixedDate = new Date("2026-02-19T12:00:00.000Z");
+    const originalDate = globalThis.Date;
+    globalThis.Date = class extends originalDate {
+      constructor() {
+        super();
+        return fixedDate;
+      }
+      static now() {
+        return fixedDate.getTime();
+      }
+    } as typeof Date;
+
+    try {
+      const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const b2 = await createB2Client(
+        "004test",
+        "K004secret",
+        "test-region",
+        "https://s3.test-region.backblazeb2.com/",
+      );
+
+      const body = Buffer.from("hi");
+      const key = "workspace/Marketing Image's (final)!*+.png";
+      await b2.putObject("bucket", key, body, "application/octet-stream");
+
+      const encodedPath =
+        "/bucket/workspace/Marketing%20Image%27s%20%28final%29%21%2A%2B.png";
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://s3.test-region.backblazeb2.com${encodedPath}`,
+        expect.objectContaining({ method: "PUT" }),
+      );
+
+      const init = fetchMock.mock.calls[0]![1]!;
+      const headers = init.headers as Record<string, string>;
+      const signingHeaders = {
+        host: "s3.test-region.backblazeb2.com",
+        "content-type": "application/octet-stream",
+        "user-agent": USER_AGENT,
+      };
+      const expectedHeaders = signRequest({
+        method: "PUT",
+        path: encodedPath,
+        headers: signingHeaders,
+        body,
+        region: "test-region",
+        accessKeyId: "004test",
+        secretAccessKey: "K004secret",
+      });
+      const rawPathHeaders = signRequest({
+        method: "PUT",
+        path: `/bucket/${key}`,
+        headers: signingHeaders,
+        body,
+        region: "test-region",
+        accessKeyId: "004test",
+        secretAccessKey: "K004secret",
+      });
+
+      expect(headers.authorization).toBe(expectedHeaders.authorization);
+      expect(headers.authorization).not.toBe(rawPathHeaders.authorization);
+    } finally {
+      globalThis.Date = originalDate;
+    }
   });
 
   it("throws structured request errors with S3 error codes", async () => {

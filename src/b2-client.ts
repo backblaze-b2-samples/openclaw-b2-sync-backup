@@ -92,6 +92,17 @@ function sha256Hex(data: Uint8Array | ""): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
+function s3EncodePath(key: string): string {
+  return key
+    .split("/")
+    .map((segment) =>
+      encodeURIComponent(segment).replace(/[!'()*]/g, (char) =>
+        `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+      ),
+    )
+    .join("/");
+}
+
 function getSignatureKey(
   secretKey: string,
   dateStamp: string,
@@ -162,6 +173,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
 
 export {
   signRequest as _signRequest,
+  s3EncodePath as _s3EncodePath,
   parseListObjectsResponse as _parseListObjectsResponse,
   resolveEndpoint as _resolveEndpoint,
 };
@@ -198,7 +210,7 @@ export async function createB2Client(
 
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -216,7 +228,7 @@ export async function createB2Client(
     },
 
     async getObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("GET", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -313,7 +325,7 @@ export async function createB2Client(
     },
 
     async deleteObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = `/${bucket}/${s3EncodePath(key)}`;
       const headers = sign("DELETE", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
