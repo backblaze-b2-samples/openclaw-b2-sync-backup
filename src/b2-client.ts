@@ -2,9 +2,12 @@ import crypto from "node:crypto";
 
 const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_RETRIES = 2;
-const DEFAULT_RETRY_BASE_DELAY_MS = 250;
-const DEFAULT_RETRY_JITTER_MS = 250;
+const DEFAULT_MAX_RETRIES = 5;
+const DEFAULT_RETRY_BASE_DELAY_MS = 500;
+const DEFAULT_RETRY_MAX_DELAY_MS = 15_000;
+const DEFAULT_RETRY_JITTER_RATIO = 0.25;
+const S3_ERROR_CODE_READ_LIMIT_BYTES = 4_096;
+const B2_ERROR_BODY_READ_LIMIT_BYTES = 64 * 1_024;
 
 export type B2Client = {
   putObject(bucket: string, key: string, body: Uint8Array, contentType: string): Promise<void>;
@@ -32,10 +35,19 @@ export type B2ClientLogger = {
 export type B2ClientOptions = {
   endpoint?: string;
   logger?: B2ClientLogger;
+  /** Use create-only PUTs and verify matching objects after ambiguous upload failures. */
+  conditionalPutObject?: boolean;
   requestTimeoutMs?: number;
   maxRetries?: number;
   retryBaseDelayMs?: number;
+  retryMaxDelayMs?: number;
+  /** Absolute additive jitter in milliseconds. Mutually exclusive with retryJitterRatio. */
   retryJitterMs?: number;
+  /**
+   * Fractional jitter around local retry delays.
+   * Retry-After jitter is additive only. Mutually exclusive with retryJitterMs.
+   */
+  retryJitterRatio?: number;
   signal?: AbortSignal;
   random?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -61,15 +73,29 @@ export class B2RequestError extends Error {
 }
 
 type NormalizedB2ClientOptions = Required<
-  Pick<B2ClientOptions, "requestTimeoutMs" | "maxRetries" | "retryBaseDelayMs" | "retryJitterMs">
+  Pick<
+    B2ClientOptions,
+    | "conditionalPutObject"
+    | "requestTimeoutMs"
+    | "maxRetries"
+    | "retryBaseDelayMs"
+    | "retryMaxDelayMs"
+    | "retryJitterRatio"
+  >
 > &
-  Pick<B2ClientOptions, "endpoint" | "logger" | "signal" | "random" | "sleep">;
+  Pick<B2ClientOptions, "endpoint" | "logger" | "signal" | "random" | "retryJitterMs" | "sleep">;
 
 type RequestContext = {
   operation: string;
   bucket: string;
   key?: string;
   prefix?: string;
+  retryResponse?: (resp: Response) => Promise<RetryDecision | undefined>;
+};
+
+type RetryDecision = {
+  status: string;
+  retryAfterMs?: number;
 };
 
 type S3SignParams = {
@@ -78,6 +104,7 @@ type S3SignParams = {
   query?: Record<string, string>;
   headers: Record<string, string>;
   body: Uint8Array | "";
+  payloadHash?: string;
   region: string;
   accessKeyId: string;
   secretAccessKey: string;
@@ -110,7 +137,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
   const now = new Date();
   const amzDate = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const dateStamp = amzDate.slice(0, 8);
-  const payloadHash = sha256Hex(body);
+  const payloadHash = params.payloadHash ?? sha256Hex(body);
 
   const signedHeaders = { ...headers };
   signedHeaders["x-amz-date"] = amzDate;
@@ -184,6 +211,7 @@ export async function createB2Client(
     headers: Record<string, string>,
     body: Uint8Array | "" = "",
     query?: Record<string, string>,
+    payloadHash?: string,
   ) =>
     signRequest({
       method,
@@ -191,6 +219,7 @@ export async function createB2Client(
       query,
       headers: { ...headers, "user-agent": USER_AGENT },
       body,
+      payloadHash,
       region: resolvedRegion,
       accessKeyId: keyId,
       secretAccessKey: applicationKey,
@@ -199,18 +228,43 @@ export async function createB2Client(
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
       const path = `/${bucket}/${key}`;
-      const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
+      const bodyBytes = body;
+      const bodySha256 = clientOptions.conditionalPutObject ? sha256Hex(bodyBytes) : undefined;
+      const putHeaders: Record<string, string> = {
+        host: endpointHost,
+        "content-type": contentType,
+      };
+      if (clientOptions.conditionalPutObject) {
+        putHeaders["if-none-match"] = "*";
+        putHeaders["x-amz-meta-sha256"] = bodySha256!;
+      }
+      const headers = sign(
+        "PUT",
+        path,
+        putHeaders,
+        bodyBytes,
+        undefined,
+        bodySha256,
+      );
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
         {
           method: "PUT",
           headers,
-          body: new Uint8Array(body),
+          body: bodyBytes as BodyInit,
         },
-        { operation: "putObject", bucket, key },
+        { operation: "putObject", bucket, key, retryResponse: retryPutObjectResponse },
         clientOptions,
       );
       if (!resp.ok) {
+        if (
+          clientOptions.conditionalPutObject &&
+          resp.status === 412 &&
+          (await headObjectMatchesExpected(bucket, key, bodyBytes.byteLength, bodySha256!))
+        ) {
+          await resp.body?.cancel().catch(() => undefined);
+          return;
+        }
         await throwB2RequestError(resp, "putObject");
       }
     },
@@ -347,12 +401,47 @@ export async function createB2Client(
     },
   };
 
+  async function headObjectMatchesExpected(
+    bucket: string,
+    key: string,
+    expectedSize: number,
+    expectedSha256: string,
+  ): Promise<boolean> {
+    const path = `/${bucket}/${key}`;
+    const headers = sign("HEAD", path, { host: endpointHost });
+    const resp = await fetchWithRetry(
+      `${resolvedEndpoint}${path}`,
+      {
+        method: "HEAD",
+        headers,
+      },
+      { operation: "headObject", bucket, key },
+      clientOptions,
+    );
+    await resp.body?.cancel().catch(() => undefined);
+    if (!resp.ok) {
+      return false;
+    }
+
+    const contentLengthHeader = resp.headers.get("content-length");
+    if (contentLengthHeader === null) {
+      return false;
+    }
+    const contentLength = Number(contentLengthHeader);
+    return (
+      Number.isFinite(contentLength) &&
+      contentLength === expectedSize &&
+      resp.headers.get("x-amz-meta-sha256") === expectedSha256
+    );
+  }
+
   return client;
 }
 
 async function throwB2RequestError(resp: Response, operation: string): Promise<never> {
-  const body = await resp.text().catch(() => "");
-  throw new B2RequestError(operation, resp.status, body, parseS3ErrorCode(body));
+  const { text, truncated } = await readResponseTextPrefix(resp, B2_ERROR_BODY_READ_LIMIT_BYTES);
+  const body = truncated ? `${text}\n[truncated]` : text;
+  throw new B2RequestError(operation, resp.status, body, parseS3ErrorCode(text));
 }
 
 function parseS3ErrorCode(body: string): string | undefined {
@@ -371,9 +460,14 @@ function normalizeClientOptions(
     endpoint: options?.endpoint ?? endpoint,
   };
 
+  if (merged.retryJitterMs !== undefined && merged.retryJitterRatio !== undefined) {
+    throw new B2ConfigError("b2: retryJitterMs and retryJitterRatio are mutually exclusive");
+  }
+
   return {
     endpoint: merged.endpoint,
     logger: merged.logger,
+    conditionalPutObject: merged.conditionalPutObject ?? false,
     signal: merged.signal,
     random: merged.random,
     sleep: merged.sleep,
@@ -388,10 +482,16 @@ function normalizeClientOptions(
       DEFAULT_RETRY_BASE_DELAY_MS,
       "retryBaseDelayMs",
     ),
-    retryJitterMs: nonNegativeNumber(
-      merged.retryJitterMs,
-      DEFAULT_RETRY_JITTER_MS,
-      "retryJitterMs",
+    retryMaxDelayMs: nonNegativeNumber(
+      merged.retryMaxDelayMs,
+      DEFAULT_RETRY_MAX_DELAY_MS,
+      "retryMaxDelayMs",
+    ),
+    retryJitterMs: optionalNonNegativeNumber(merged.retryJitterMs, "retryJitterMs"),
+    retryJitterRatio: ratioNumber(
+      merged.retryJitterRatio,
+      DEFAULT_RETRY_JITTER_RATIO,
+      "retryJitterRatio",
     ),
   };
 }
@@ -412,10 +512,28 @@ function nonNegativeNumber(value: number | undefined, fallback: number, name: st
   return resolved;
 }
 
+function optionalNonNegativeNumber(value: number | undefined, name: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value < 0) {
+    throw new B2ConfigError(`b2: ${name} must be a non-negative finite number`);
+  }
+  return value;
+}
+
 function nonNegativeInteger(value: number | undefined, fallback: number, name: string): number {
   const resolved = value ?? fallback;
   if (!Number.isInteger(resolved) || resolved < 0) {
     throw new B2ConfigError(`b2: ${name} must be a non-negative finite integer`);
+  }
+  return resolved;
+}
+
+function ratioNumber(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved < 0 || resolved > 1) {
+    throw new B2ConfigError(`b2: ${name} must be a finite number between 0 and 1`);
   }
   return resolved;
 }
@@ -478,14 +596,16 @@ async function fetchWithRetry(
     try {
       const resp = await fetch(url, { ...init, signal });
       const elapsedMs = Date.now() - startedAt;
-      logAttempt(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+      const retryDecision = await retryableResponseDecision(resp, context);
+      const status = retryDecision?.status ?? String(resp.status);
+      logAttempt(options, context, attempt, maxAttempts, status, elapsedMs);
 
-      if (!isRetryableStatus(resp.status) || attempt === maxAttempts) {
+      if (!retryDecision || attempt === maxAttempts) {
         return resp;
       }
 
       await resp.body?.cancel().catch(() => undefined);
-      await waitBeforeRetry(options, context, attempt, maxAttempts, String(resp.status), elapsedMs);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, retryDecision, elapsedMs);
     } catch (err) {
       const elapsedMs = Date.now() - startedAt;
       const status = options.signal?.aborted ? "aborted" : signal.aborted ? "timeout" : "network-error";
@@ -496,7 +616,7 @@ async function fetchWithRetry(
         throw err;
       }
 
-      await waitBeforeRetry(options, context, attempt, maxAttempts, status, elapsedMs);
+      await waitBeforeRetry(options, context, attempt, maxAttempts, { status }, elapsedMs);
     } finally {
       cleanup();
     }
@@ -534,25 +654,60 @@ async function waitBeforeRetry(
   context: RequestContext,
   attempt: number,
   maxAttempts: number,
-  status: string,
+  retryDecision: RetryDecision,
   elapsedMs: number,
 ): Promise<void> {
   if (options.signal?.aborted) {
     throw abortReason(options.signal);
   }
-  const delayMs = retryDelayMs(options, attempt);
+  const delayMs = retryDelayMs(options, attempt, retryDecision.retryAfterMs);
   options.logger?.warn?.(
-    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
+    `b2 ${context.operation}: retrying ${formatTarget(context)} attempt=${attempt}/${maxAttempts} status=${retryDecision.status} elapsedMs=${elapsedMs} nextDelayMs=${delayMs}`,
   );
   await sleepWithSignal(delayMs, options.signal, options.sleep);
 }
 
-function retryDelayMs(options: NormalizedB2ClientOptions, attempt: number): number {
-  const jitter =
-    options.retryJitterMs > 0
-      ? Math.floor((options.random ?? Math.random)() * options.retryJitterMs)
-      : 0;
-  return options.retryBaseDelayMs * 2 ** (attempt - 1) + jitter;
+function retryDelayMs(
+  options: NormalizedB2ClientOptions,
+  attempt: number,
+  retryAfterMs?: number,
+): number {
+  const selectedDelay = retryAfterMs ?? options.retryBaseDelayMs * 2 ** (attempt - 1);
+  const random = options.random ?? Math.random;
+  const jitteredDelay =
+    retryAfterMs === undefined
+      ? applyRetryJitter(selectedDelay, options, random)
+      : applyRetryAfterJitter(selectedDelay, options, random);
+  return Math.min(options.retryMaxDelayMs, Math.max(0, Math.floor(jitteredDelay)));
+}
+
+function applyRetryJitter(
+  delayMs: number,
+  options: NormalizedB2ClientOptions,
+  random: () => number,
+): number {
+  return options.retryJitterMs === undefined
+    ? applyRatioJitter(delayMs, options.retryJitterRatio, random)
+    : delayMs + Math.floor(random() * options.retryJitterMs);
+}
+
+function applyRetryAfterJitter(
+  delayMs: number,
+  options: NormalizedB2ClientOptions,
+  random: () => number,
+): number {
+  if (options.retryJitterMs !== undefined) {
+    return delayMs + Math.floor(random() * options.retryJitterMs);
+  }
+  return delayMs + random() * delayMs * options.retryJitterRatio;
+}
+
+function applyRatioJitter(delayMs: number, ratio: number, random: () => number): number {
+  if (delayMs === 0 || ratio === 0) {
+    return delayMs;
+  }
+  const jitterRange = delayMs * ratio;
+  return delayMs - jitterRange + random() * jitterRange * 2;
 }
 
 async function sleepWithSignal(
@@ -613,8 +768,108 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("b2 request aborted");
 }
 
-function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500;
+async function retryableResponseDecision(
+  resp: Response,
+  context: RequestContext,
+): Promise<RetryDecision | undefined> {
+  if (resp.status === 408 || resp.status === 429 || resp.status >= 500) {
+    return {
+      status: String(resp.status),
+      retryAfterMs: retryAfterDelayMs(resp),
+    };
+  }
+
+  return context.retryResponse?.(resp);
+}
+
+async function retryPutObjectResponse(resp: Response): Promise<RetryDecision | undefined> {
+  if (resp.status !== 400) {
+    return undefined;
+  }
+
+  const code = await readS3ErrorCode(resp.clone(), S3_ERROR_CODE_READ_LIMIT_BYTES);
+  return code === "IncompleteBody" ? { status: "400 IncompleteBody" } : undefined;
+}
+
+async function readS3ErrorCode(resp: Response, maxBytes: number): Promise<string | undefined> {
+  const { text } = await readResponseTextPrefix(resp, maxBytes, (bodyPrefix) =>
+    parseS3ErrorCode(bodyPrefix) !== undefined,
+  );
+  return parseS3ErrorCode(text);
+}
+
+async function readResponseTextPrefix(
+  resp: Response,
+  maxBytes: number,
+  shouldStop?: (text: string) => boolean,
+): Promise<{ text: string; truncated: boolean }> {
+  if (!resp.body || maxBytes <= 0) {
+    return { text: "", truncated: false };
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytesRead = 0;
+  let doneReading = false;
+  let truncated = false;
+
+  try {
+    while (bytesRead < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) {
+        doneReading = true;
+        break;
+      }
+
+      const remainingBytes = maxBytes - bytesRead;
+      const chunk = value.subarray(0, remainingBytes);
+      bytesRead += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+
+      if (shouldStop?.(text)) {
+        truncated = true;
+        break;
+      }
+      if (chunk.byteLength < value.byteLength) {
+        truncated = true;
+        break;
+      }
+    }
+  } catch {
+    return { text, truncated: true };
+  } finally {
+    if (!doneReading) {
+      truncated = true;
+      void reader.cancel().catch(() => undefined);
+    }
+    reader.releaseLock();
+  }
+
+  text += decoder.decode();
+  return { text, truncated };
+}
+
+function retryAfterDelayMs(resp: Response): number | undefined {
+  if (resp.status !== 429 && resp.status !== 503) {
+    return undefined;
+  }
+
+  const value = resp.headers.get("retry-after")?.trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (/^\d+$/.test(value)) {
+    return Number(value) * 1_000;
+  }
+
+  const retryAtMs = Date.parse(value);
+  if (!Number.isFinite(retryAtMs)) {
+    return undefined;
+  }
+
+  return Math.max(0, retryAtMs - Date.now());
 }
 
 function logAttempt(

@@ -69,6 +69,7 @@ export function createB2BackupService(
           const cronB2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
             endpoint: config.endpoint,
             logger: ctx.logger,
+            conditionalPutObject: true,
             signal,
           });
           await push(config, ctx.stateDir, cronB2, ctx.logger);
@@ -88,6 +89,7 @@ export function createB2BackupService(
           const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
             endpoint: config.endpoint,
             logger: ctx.logger,
+            conditionalPutObject: true,
             signal,
           });
           await push(config, ctx.stateDir, b2, ctx.logger);

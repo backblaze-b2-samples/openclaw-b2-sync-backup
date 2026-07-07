@@ -48,6 +48,7 @@ const plugin = {
           const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
             endpoint: config.endpoint,
             logger: api.logger,
+            conditionalPutObject: true,
             signal,
           });
           await push(config, stateDir, b2, api.logger);
@@ -67,6 +68,7 @@ const plugin = {
         const b2 = await createB2Client(config.keyId, config.applicationKey, config.region, {
           endpoint: config.endpoint,
           logger: api.logger,
+          conditionalPutObject: true,
           signal,
         });
         await push(config, stateDir, b2, api.logger);
