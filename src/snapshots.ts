@@ -126,13 +126,19 @@ export async function pruneSnapshots(
   if (snapshots.length <= keep) return [];
 
   const toDelete = snapshots.slice(0, snapshots.length - keep);
+  const pruned: string[] = [];
   for (const snapshotId of toDelete) {
+    let quarantined = false;
     const objects = await b2.listObjects(bucket, `${prefix}/${snapshotId}/`);
     for (const obj of objects) {
-      await deleteObjectIfPresent(b2, bucket, obj.key);
+      const deleted = await deleteObjectIfPresent(b2, bucket, obj.key);
+      quarantined ||= !deleted;
+    }
+    if (!quarantined) {
+      pruned.push(snapshotId);
     }
   }
-  return toDelete;
+  return pruned;
 }
 
 /** Prunes whole safety-* prefixes separately from regular snapshot retention. */
@@ -147,22 +153,29 @@ export async function pruneSafetySnapshots(
   if (safetyDirs.length <= keep) return [];
 
   const toDelete = safetyDirs.slice(0, safetyDirs.length - keep);
+  const pruned: string[] = [];
   for (const safetyDir of toDelete) {
+    let quarantined = false;
     const objects = await b2.listObjects(bucket, `${prefix}/${safetyDir}/`);
     for (const obj of objects) {
-      await deleteObjectIfPresent(b2, bucket, obj.key);
+      const deleted = await deleteObjectIfPresent(b2, bucket, obj.key);
+      quarantined ||= !deleted;
+    }
+    if (!quarantined) {
+      pruned.push(safetyDir);
     }
   }
-  return toDelete;
+  return pruned;
 }
 
-async function deleteObjectIfPresent(b2: B2Client, bucket: string, key: string): Promise<void> {
-  if (hasDotOnlyPathSegment(key)) return;
+async function deleteObjectIfPresent(b2: B2Client, bucket: string, key: string): Promise<boolean> {
+  if (hasDotOnlyPathSegment(key)) return false;
 
   try {
     await b2.deleteObject(bucket, key);
+    return true;
   } catch (err) {
-    if (isMissingObjectError(err)) return;
+    if (isMissingObjectError(err)) return true;
     throw err;
   }
 }

@@ -289,7 +289,7 @@ describe("snapshots", () => {
       expect(b2.deleteObject).toHaveBeenCalledTimes(1);
     });
 
-    it("quarantines dot-segment object keys during pruning", async () => {
+    it("does not report dot-segment object keys as pruned", async () => {
       const dotKey = `${prefix}/2026-01-01T00-00-00Z/./poison.txt`;
       const dotDotKey = `${prefix}/2026-01-01T00-00-00Z/../poison.txt`;
       const safeKey = `${prefix}/2026-01-01T00-00-00Z/file.txt`;
@@ -313,7 +313,7 @@ describe("snapshots", () => {
 
       const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
 
-      expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
+      expect(pruned).toEqual([]);
       expect(b2.deleteObject).toHaveBeenCalledTimes(1);
       expect(b2.deleteObject).toHaveBeenCalledWith(bucket, safeKey);
       expect(b2.deleteObject).not.toHaveBeenCalledWith(bucket, dotKey);
@@ -376,6 +376,38 @@ describe("snapshots", () => {
         bucket,
         `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/partial.bin`,
       );
+    });
+
+    it("does not report safety snapshots with dot-segment object keys as pruned", async () => {
+      const dotKey = `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/./poison.txt`;
+      const safeKey = `${prefix}/safety-2026-01-01T00-00-00Z/2026-01-01T00-00-01Z/file.txt`;
+      const b2 = createMockB2([
+        { key: dotKey, size: 10, lastModified: "" },
+        { key: safeKey, size: 10, lastModified: "" },
+        {
+          key: `${prefix}/safety-2026-01-02T00-00-00Z/2026-01-02T00-00-01Z/file.txt`,
+          size: 10,
+          lastModified: "",
+        },
+      ]);
+      b2.deleteObject.mockImplementation(async (_bucket: string, key: string) => {
+        if (key === dotKey) {
+          throw new B2RequestError(
+            "deleteObject",
+            403,
+            "<Error><Code>AccessDenied</Code><Message>Signature validation failed</Message></Error>",
+            "AccessDenied",
+          );
+        }
+        b2._deleted.push(key);
+      });
+
+      const pruned = await pruneSafetySnapshots(b2, bucket, prefix, 1);
+
+      expect(pruned).toEqual([]);
+      expect(b2.deleteObject).toHaveBeenCalledTimes(1);
+      expect(b2.deleteObject).toHaveBeenCalledWith(bucket, safeKey);
+      expect(b2.deleteObject).not.toHaveBeenCalledWith(bucket, dotKey);
     });
 
     it("does nothing when safety snapshots are within keep count", async () => {
