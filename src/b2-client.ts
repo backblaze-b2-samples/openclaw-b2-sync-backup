@@ -669,9 +669,9 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   let match: RegExpExecArray | null;
   while ((match = contentRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const key = decodeXmlText(block.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] ?? "");
-    const size = Number(block.match(/<Size>(.*?)<\/Size>/)?.[1] ?? "0");
-    const lastModified = block.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] ?? "";
+    const key = decodeXmlText(readXmlTagText(block, "Key") ?? "");
+    const size = Number(normalizeXmlTextIfMultiline(readXmlTagText(block, "Size") ?? "0"));
+    const lastModified = normalizeXmlTextIfMultiline(readXmlTagText(block, "LastModified") ?? "");
     entries.push({ key, size, lastModified });
   }
 
@@ -679,7 +679,7 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = decodeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "");
+    const prefix = decodeXmlText(readXmlTagText(block, "Prefix") ?? "");
     if (prefix) {
       prefixes.push(prefix);
     }
@@ -687,10 +687,14 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
 
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
   const nextToken = isTruncated
-    ? decodeOptionalXmlText(xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/)?.[1])
+    ? decodeOptionalXmlText(readXmlTagText(xml, "NextContinuationToken"))
     : undefined;
 
   return { entries, prefixes, nextToken };
+}
+
+function readXmlTagText(xml: string, tagName: string): string | undefined {
+  return xml.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`))?.[1];
 }
 
 function decodeOptionalXmlText(text: string | undefined): string | undefined {
@@ -698,7 +702,7 @@ function decodeOptionalXmlText(text: string | undefined): string | undefined {
 }
 
 function decodeXmlText(text: string): string {
-  return decodeXmlEntities(normalizeXmlText(text));
+  return decodeXmlEntities(normalizeXmlTextIfMultiline(text));
 }
 
 const XML_ENTITIES: Record<string, string> = {
@@ -727,6 +731,10 @@ function decodeXmlCodePoint(entity: string, codePoint: number): string {
   } catch {
     return entity;
   }
+}
+
+function normalizeXmlTextIfMultiline(text: string): string {
+  return /[\r\n]/.test(text) ? normalizeXmlText(text) : text;
 }
 
 function normalizeXmlText(text: string): string {

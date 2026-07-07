@@ -255,15 +255,42 @@ describe("parseListObjectsResponse", () => {
           snapshot/a&amp;
           &lt;&gt;&quot;&apos;.txt
         </Key>
-        <Size>100</Size>
-        <LastModified>2026-01-01</LastModified>
+        <Size>
+          100
+        </Size>
+        <LastModified>
+          2026-01-01
+        </LastModified>
       </Contents>
       <CommonPrefixes><Prefix>snapshot/a&amp;&lt;&gt;&quot;&apos;/</Prefix></CommonPrefixes>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries[0]?.key).toBe(`snapshot/a&<>"'.txt`);
+    expect(page.entries[0]?.size).toBe(100);
+    expect(page.entries[0]?.lastModified).toBe("2026-01-01");
     expect(page.prefixes).toEqual([`snapshot/a&<>"'/`]);
     expect(page.nextToken).toBe(`token&<>"'+`);
+  });
+
+  it("preserves single-line whitespace in decoded XML values", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>  token&amp;  </NextContinuationToken>
+      <Contents>
+        <Key>  snapshot/a&amp;.txt  </Key>
+        <Size>7</Size>
+        <LastModified> 2026-01-01 </LastModified>
+      </Contents>
+      <CommonPrefixes><Prefix>  snapshot/  </Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]).toEqual({
+      key: "  snapshot/a&.txt  ",
+      size: 7,
+      lastModified: " 2026-01-01 ",
+    });
+    expect(page.prefixes).toEqual(["  snapshot/  "]);
+    expect(page.nextToken).toBe("  token&  ");
   });
 
   it("returns no nextToken when not truncated", () => {
