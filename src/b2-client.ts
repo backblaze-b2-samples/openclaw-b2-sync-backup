@@ -696,7 +696,7 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
 }
 
 function decodeOptionalXmlText(text: string | undefined): string | undefined {
-  return text === undefined ? undefined : decodeXmlEntities(text);
+  return text === undefined ? undefined : decodeXmlEntities(normalizeXmlText(text));
 }
 
 const XML_ENTITIES: Record<string, string> = {

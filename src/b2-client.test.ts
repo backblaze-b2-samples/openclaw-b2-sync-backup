@@ -246,7 +246,10 @@ describe("parseListObjectsResponse", () => {
   it("decodes XML entities in keys, common prefixes, and continuation tokens", () => {
     const xml = `<ListBucketResult>
       <IsTruncated>true</IsTruncated>
-      <NextContinuationToken>token&amp;&lt;&gt;&quot;&apos;&#43;</NextContinuationToken>
+      <NextContinuationToken>
+        token&amp;
+        &lt;&gt;&quot;&apos;&#43;
+      </NextContinuationToken>
       <Contents>
         <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
         <Size>100</Size>
