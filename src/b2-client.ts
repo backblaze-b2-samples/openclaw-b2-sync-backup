@@ -700,7 +700,7 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
     }
   }
 
-  const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+  const isTruncated = normalizeXmlText(readXmlTagText(xml, "IsTruncated") ?? "") === "true";
   const nextToken = isTruncated
     ? decodeOptionalListedXmlText(
         readXmlTagText(xml, "NextContinuationToken"),

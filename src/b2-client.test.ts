@@ -235,7 +235,9 @@ describe("parseListObjectsResponse", () => {
 
   it("returns nextToken when truncated", () => {
     const xml = `<ListBucketResult>
-      <IsTruncated>true</IsTruncated>
+      <IsTruncated>
+        true
+      </IsTruncated>
       <NextContinuationToken>abc123</NextContinuationToken>
       <Contents><Key>prefix/file1.txt</Key><Size>100</Size><LastModified>2026-01-01</LastModified></Contents>
     </ListBucketResult>`;
