@@ -92,19 +92,28 @@ function sha256Hex(data: Uint8Array | ""): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
+function s3Encode(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
 function s3EncodePath(key: string): string {
   return key
     .split("/")
-    .map((segment) =>
-      encodeURIComponent(segment).replace(/[!'()*]/g, (char) =>
-        `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
-      ),
-    )
+    .map((segment) => s3Encode(segment))
     .join("/");
 }
 
 function buildObjectPath(bucket: string, key: string): string {
   return `/${bucket}/${s3EncodePath(key)}`;
+}
+
+function buildS3QueryString(query: Record<string, string>): string {
+  return Object.keys(query)
+    .sort()
+    .map((key) => `${s3Encode(key)}=${s3Encode(query[key]!)}`)
+    .join("&");
 }
 
 function getSignatureKey(
@@ -137,12 +146,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
     .join("\n");
   const signedHeadersList = sortedHeaderKeys.map((k) => k.toLowerCase()).join(";");
 
-  const queryStr = query
-    ? Object.keys(query)
-        .sort()
-        .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(query[k]!)}`)
-        .join("&")
-    : "";
+  const queryStr = query ? buildS3QueryString(query) : "";
 
   const canonicalRequest = [
     method,
@@ -264,9 +268,7 @@ export async function createB2Client(
         }
         const reqPath = `/${bucket}`;
         const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
-        const qs = Object.entries(query)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join("&");
+        const qs = buildS3QueryString(query);
         const resp = await fetchWithRetry(
           `${resolvedEndpoint}${reqPath}?${qs}`,
           {
@@ -304,9 +306,7 @@ export async function createB2Client(
         }
         const reqPath = `/${bucket}`;
         const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
-        const qs = Object.entries(query)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join("&");
+        const qs = buildS3QueryString(query);
         const resp = await fetchWithRetry(
           `${resolvedEndpoint}${reqPath}?${qs}`,
           {

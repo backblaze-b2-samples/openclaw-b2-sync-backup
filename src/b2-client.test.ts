@@ -490,6 +490,39 @@ describe("createB2Client", () => {
     );
   });
 
+  it("uses S3 query encoding for list prefixes and continuation tokens", async () => {
+    const firstPage = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>next!&apos;()*</NextContinuationToken>
+    </ListBucketResult>`;
+    const secondPage = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(firstPage, { status: 200 }))
+      .mockResolvedValueOnce(new Response(secondPage, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    await b2.listObjects("bucket", "snapshot/has !'()*");
+
+    const encodedPrefix = "snapshot%2Fhas%20%21%27%28%29%2A";
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `https://s3.test-region.backblazeb2.com/bucket?list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://s3.test-region.backblazeb2.com/bucket?continuation-token=next%21%27%28%29%2A&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("throws structured request errors with S3 error codes", async () => {
     const body = "<Error><Code>NoSuchKey</Code><Message>missing</Message></Error>";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 404 })));
