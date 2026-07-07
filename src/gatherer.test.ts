@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatherFiles, shouldInclude } from "./gatherer.js";
 
 describe("gatherer", () => {
@@ -27,6 +27,15 @@ describe("gatherer", () => {
     it("includes workspace files", () => {
       expect(shouldInclude("workspace/SOUL.md")).toBe(true);
       expect(shouldInclude("workspace/nested/file.txt")).toBe(true);
+    });
+
+    it("excludes paths containing ASCII control characters", () => {
+      expect(shouldInclude("workspace/attachment.pdf\r")).toBe(false);
+      expect(shouldInclude("workspace/nested\n/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/nested\t/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/nested\0/file.txt")).toBe(false);
+      expect(shouldInclude("workspace/notes\u001f.txt")).toBe(false);
+      expect(shouldInclude("workspace/session-notes\u007f.json")).toBe(false);
     });
 
     it("includes multi-agent workspace directories", () => {
@@ -130,6 +139,19 @@ describe("gatherer", () => {
       const paths = files.map((f) => f.relativePath);
 
       expect(paths).toEqual(["openclaw.json", "workspace/a.md", "workspace/b.md"]);
+    });
+
+    it("warns with an escaped path when skipping control-character files", async () => {
+      await fs.promises.mkdir(path.join(tmpDir, "workspace"), { recursive: true });
+      await fs.promises.writeFile(path.join(tmpDir, "workspace", "bad\u007f.txt"), "bad");
+      const logger = { warn: vi.fn() };
+
+      const files = await gatherFiles(tmpDir, { logger });
+
+      expect(files).toEqual([]);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "b2-backup: skipped path with ASCII control character: workspace/bad\\u007f.txt",
+      );
     });
   });
 });

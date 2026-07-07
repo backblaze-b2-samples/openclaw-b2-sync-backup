@@ -92,7 +92,7 @@ async function pushWithLock(
   }
 
   // 1. Gather files
-  const files = await gatherFiles(stateDir);
+  const files = await gatherFiles(stateDir, { logger });
   if (files.length === 0) {
     logger.info("b2-backup: no files to sync");
     return;
