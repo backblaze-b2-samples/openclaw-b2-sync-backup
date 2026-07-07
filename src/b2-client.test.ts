@@ -269,15 +269,28 @@ describe("parseListObjectsResponse", () => {
 
   it("decodes URL-encoded list values without losing literal newlines", () => {
     const xml = `<ListBucketResult>
-      <EncodingType>url</EncodingType>
+      <EncodingType>
+        url
+      </EncodingType>
       <IsTruncated>true</IsTruncated>
-      <NextContinuationToken>next%0Atoken%21%27%28%29%2A</NextContinuationToken>
+      <NextContinuationToken>
+        next%0A
+        token%21%27%28%29%2A
+      </NextContinuationToken>
       <Contents>
-        <Key>snapshot/a%0Ab%20%21%27%28%29%2A.txt</Key>
+        <Key>
+          snapshot%2Fa%0A
+          b%20%21%27%28%29%2A.txt
+        </Key>
         <Size>7</Size>
         <LastModified>2026-01-01</LastModified>
       </Contents>
-      <CommonPrefixes><Prefix>snapshot/a%0Ab%2F</Prefix></CommonPrefixes>
+      <CommonPrefixes>
+        <Prefix>
+          snapshot%2Fa%0A
+          b%2F
+        </Prefix>
+      </CommonPrefixes>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries[0]?.key).toBe("snapshot/a\nb !'()*.txt");

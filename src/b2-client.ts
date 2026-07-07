@@ -675,7 +675,7 @@ type ListObjectsPage = {
 
 function parseListObjectsResponse(xml: string): ListObjectsPage {
   const listValuesAreUrlEncoded =
-    decodeXmlEntities(readXmlTagText(xml, "EncodingType") ?? "") === "url";
+    normalizeXmlText(decodeXmlEntities(readXmlTagText(xml, "EncodingType") ?? "")) === "url";
   const entries: B2ObjectEntry[] = [];
   const contentRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
   let match: RegExpExecArray | null;
@@ -723,7 +723,8 @@ function decodeOptionalListedXmlText(
 }
 
 function decodeListedXmlText(text: string, urlEncoded: boolean): string {
-  const decodedXmlText = decodeXmlEntities(text);
+  const encodedXmlText = urlEncoded ? normalizeXmlText(text) : text;
+  const decodedXmlText = decodeXmlEntities(encodedXmlText);
   return urlEncoded ? decodeUrlEncodedListText(decodedXmlText) : decodedXmlText;
 }
 
