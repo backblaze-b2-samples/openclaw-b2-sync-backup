@@ -92,6 +92,37 @@ function sha256Hex(data: Uint8Array | ""): string {
   return crypto.createHash("sha256").update(data).digest("hex");
 }
 
+function s3Encode(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (char) =>
+    `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+function s3EncodePath(key: string): string {
+  return key
+    .split("/")
+    .map((segment) => s3Encode(segment))
+    .join("/");
+}
+
+function hasDotOnlyPathSegment(key: string): boolean {
+  return key.split("/").some((segment) => segment === "." || segment === "..");
+}
+
+function buildObjectPath(bucket: string, key: string): string {
+  if (hasDotOnlyPathSegment(key)) {
+    throw new B2ConfigError("b2: object key must not contain . or .. path segments");
+  }
+  return `/${bucket}/${s3EncodePath(key)}`;
+}
+
+function buildS3QueryString(query: Record<string, string>): string {
+  return Object.keys(query)
+    .sort()
+    .map((key) => `${s3Encode(key)}=${s3Encode(query[key]!)}`)
+    .join("&");
+}
+
 function getSignatureKey(
   secretKey: string,
   dateStamp: string,
@@ -122,12 +153,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
     .join("\n");
   const signedHeadersList = sortedHeaderKeys.map((k) => k.toLowerCase()).join(";");
 
-  const queryStr = query
-    ? Object.keys(query)
-        .sort()
-        .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(query[k]!)}`)
-        .join("&")
-    : "";
+  const queryStr = query ? buildS3QueryString(query) : "";
 
   const canonicalRequest = [
     method,
@@ -161,7 +187,9 @@ function signRequest(params: S3SignParams): Record<string, string> {
 }
 
 export {
+  hasDotOnlyPathSegment,
   signRequest as _signRequest,
+  s3EncodePath as _s3EncodePath,
   parseListObjectsResponse as _parseListObjectsResponse,
   resolveEndpoint as _resolveEndpoint,
 };
@@ -198,7 +226,7 @@ export async function createB2Client(
 
   const client: B2ClientWithPrefixes = {
     async putObject(bucket, key, body, contentType) {
-      const path = `/${bucket}/${key}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("PUT", path, { host: endpointHost, "content-type": contentType }, body);
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -216,7 +244,7 @@ export async function createB2Client(
     },
 
     async getObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("GET", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -239,6 +267,7 @@ export async function createB2Client(
 
       do {
         const query: Record<string, string> = {
+          "encoding-type": "url",
           "list-type": "2",
           prefix,
           "max-keys": "1000",
@@ -248,9 +277,7 @@ export async function createB2Client(
         }
         const reqPath = `/${bucket}`;
         const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
-        const qs = Object.entries(query)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join("&");
+        const qs = buildS3QueryString(query);
         const resp = await fetchWithRetry(
           `${resolvedEndpoint}${reqPath}?${qs}`,
           {
@@ -278,6 +305,7 @@ export async function createB2Client(
 
       do {
         const query: Record<string, string> = {
+          "encoding-type": "url",
           "list-type": "2",
           prefix,
           delimiter: "/",
@@ -288,9 +316,7 @@ export async function createB2Client(
         }
         const reqPath = `/${bucket}`;
         const headers = sign("GET", reqPath, { host: endpointHost }, "", query);
-        const qs = Object.entries(query)
-          .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
-          .join("&");
+        const qs = buildS3QueryString(query);
         const resp = await fetchWithRetry(
           `${resolvedEndpoint}${reqPath}?${qs}`,
           {
@@ -313,7 +339,7 @@ export async function createB2Client(
     },
 
     async deleteObject(bucket, key) {
-      const path = `/${bucket}/${key}`;
+      const path = buildObjectPath(bucket, key);
       const headers = sign("DELETE", path, { host: endpointHost });
       const resp = await fetchWithRetry(
         `${resolvedEndpoint}${path}`,
@@ -648,14 +674,16 @@ type ListObjectsPage = {
 };
 
 function parseListObjectsResponse(xml: string): ListObjectsPage {
+  const listValuesAreUrlEncoded =
+    normalizeXmlText(decodeXmlEntities(readXmlTagText(xml, "EncodingType") ?? "")) === "url";
   const entries: B2ObjectEntry[] = [];
   const contentRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
   let match: RegExpExecArray | null;
   while ((match = contentRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const key = block.match(/<Key>(.*?)<\/Key>/)?.[1] ?? "";
-    const size = Number(block.match(/<Size>(.*?)<\/Size>/)?.[1] ?? "0");
-    const lastModified = block.match(/<LastModified>(.*?)<\/LastModified>/)?.[1] ?? "";
+    const key = decodeListedXmlText(readXmlTagText(block, "Key") ?? "", listValuesAreUrlEncoded);
+    const size = Number(normalizeXmlTextIfMultiline(readXmlTagText(block, "Size") ?? "0"));
+    const lastModified = normalizeXmlTextIfMultiline(readXmlTagText(block, "LastModified") ?? "");
     entries.push({ key, size, lastModified });
   }
 
@@ -663,18 +691,81 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = normalizeXmlText(block.match(/<Prefix>([\s\S]*?)<\/Prefix>/)?.[1] ?? "");
+    const prefix = decodeListedXmlText(
+      readXmlTagText(block, "Prefix") ?? "",
+      listValuesAreUrlEncoded,
+    );
     if (prefix) {
       prefixes.push(prefix);
     }
   }
 
-  const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
+  const isTruncated = normalizeXmlText(readXmlTagText(xml, "IsTruncated") ?? "") === "true";
   const nextToken = isTruncated
-    ? xml.match(/<NextContinuationToken>(.*?)<\/NextContinuationToken>/)?.[1]
+    ? decodeOptionalListedXmlText(
+        readXmlTagText(xml, "NextContinuationToken"),
+        listValuesAreUrlEncoded,
+      )
     : undefined;
 
   return { entries, prefixes, nextToken };
+}
+
+function readXmlTagText(xml: string, tagName: string): string | undefined {
+  return xml.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`))?.[1];
+}
+
+function decodeOptionalListedXmlText(
+  text: string | undefined,
+  urlEncoded: boolean,
+): string | undefined {
+  return text === undefined ? undefined : decodeListedXmlText(text, urlEncoded);
+}
+
+function decodeListedXmlText(text: string, urlEncoded: boolean): string {
+  const encodedXmlText = urlEncoded ? normalizeXmlText(text) : text;
+  const decodedXmlText = decodeXmlEntities(encodedXmlText);
+  return urlEncoded ? decodeUrlEncodedListText(decodedXmlText) : decodedXmlText;
+}
+
+function decodeUrlEncodedListText(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+const XML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  quot: '"',
+};
+
+function decodeXmlEntities(text: string): string {
+  return text.replace(/&(#(?:[xX][0-9a-fA-F]+|\d+)|[a-zA-Z][a-zA-Z0-9]+);/g, (entity, body) => {
+    if (body.startsWith("#x") || body.startsWith("#X")) {
+      return decodeXmlCodePoint(entity, Number.parseInt(body.slice(2), 16));
+    }
+    if (body.startsWith("#")) {
+      return decodeXmlCodePoint(entity, Number.parseInt(body.slice(1), 10));
+    }
+    return XML_ENTITIES[body] ?? entity;
+  });
+}
+
+function decodeXmlCodePoint(entity: string, codePoint: number): string {
+  try {
+    return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : entity;
+  } catch {
+    return entity;
+  }
+}
+
+function normalizeXmlTextIfMultiline(text: string): string {
+  return /[\r\n]/.test(text) ? normalizeXmlText(text) : text;
 }
 
 function normalizeXmlText(text: string): string {

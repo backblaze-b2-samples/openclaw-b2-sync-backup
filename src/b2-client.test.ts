@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   _parseListObjectsResponse as parseListObjectsResponse,
   _resolveEndpoint as resolveEndpoint,
+  _s3EncodePath as s3EncodePath,
   _signRequest as signRequest,
   B2ConfigError,
   B2RequestError,
   createB2Client,
+  hasDotOnlyPathSegment,
 } from "./b2-client.js";
 
 const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
@@ -203,6 +205,17 @@ describe("b2-client Sig V4 signing", () => {
   });
 });
 
+describe("s3EncodePath", () => {
+  it("encodes object key segments with S3 Sig V4 path rules", () => {
+    expect(s3EncodePath("workspace/Marketing Image's (final)!*+.png")).toBe(
+      "workspace/Marketing%20Image%27s%20%28final%29%21%2A%2B.png",
+    );
+    expect(s3EncodePath("nested//already%encoded/~safe")).toBe(
+      "nested//already%25encoded/~safe",
+    );
+  });
+});
+
 describe("parseListObjectsResponse", () => {
   it("parses entries from XML", () => {
     const xml = `<ListBucketResult>
@@ -222,13 +235,101 @@ describe("parseListObjectsResponse", () => {
 
   it("returns nextToken when truncated", () => {
     const xml = `<ListBucketResult>
-      <IsTruncated>true</IsTruncated>
+      <IsTruncated>
+        true
+      </IsTruncated>
       <NextContinuationToken>abc123</NextContinuationToken>
       <Contents><Key>prefix/file1.txt</Key><Size>100</Size><LastModified>2026-01-01</LastModified></Contents>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
     expect(page.entries).toHaveLength(1);
     expect(page.nextToken).toBe("abc123");
+  });
+
+  it("decodes XML entities in keys, common prefixes, and continuation tokens", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>token&amp;&lt;&gt;&quot;&apos;&#43;</NextContinuationToken>
+      <Contents>
+        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
+        <Size>
+          100
+        </Size>
+        <LastModified>
+          2026-01-01
+        </LastModified>
+      </Contents>
+      <CommonPrefixes><Prefix>snapshot/a&amp;&lt;&gt;&quot;&apos;/</Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe(`snapshot/a&<>"'.txt`);
+    expect(page.entries[0]?.size).toBe(100);
+    expect(page.entries[0]?.lastModified).toBe("2026-01-01");
+    expect(page.prefixes).toEqual([`snapshot/a&<>"'/`]);
+    expect(page.nextToken).toBe(`token&<>"'+`);
+  });
+
+  it("decodes URL-encoded list values without losing literal newlines", () => {
+    const xml = `<ListBucketResult>
+      <EncodingType>
+        url
+      </EncodingType>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>
+        next%0A
+        token%21%27%28%29%2A
+      </NextContinuationToken>
+      <Contents>
+        <Key>
+          snapshot%2Fa%0A
+          b%20%21%27%28%29%2A.txt
+        </Key>
+        <Size>7</Size>
+        <LastModified>2026-01-01</LastModified>
+      </Contents>
+      <CommonPrefixes>
+        <Prefix>
+          snapshot%2Fa%0A
+          b%2F
+        </Prefix>
+      </CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe("snapshot/a\nb !'()*.txt");
+    expect(page.prefixes).toEqual(["snapshot/a\nb/"]);
+    expect(page.nextToken).toBe("next\ntoken!'()*");
+  });
+
+  it("preserves literal newlines in non-url XML list values", () => {
+    const xml = [
+      "<ListBucketResult>",
+      "<IsTruncated>false</IsTruncated>",
+      "<Contents><Key>snapshot/a\nb.txt</Key><Size>1</Size><LastModified>2026-01-01</LastModified></Contents>",
+      "</ListBucketResult>",
+    ].join("");
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe("snapshot/a\nb.txt");
+  });
+
+  it("preserves single-line whitespace in decoded XML values", () => {
+    const xml = `<ListBucketResult>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>  token&amp;  </NextContinuationToken>
+      <Contents>
+        <Key>  snapshot/a&amp;.txt  </Key>
+        <Size>7</Size>
+        <LastModified> 2026-01-01 </LastModified>
+      </Contents>
+      <CommonPrefixes><Prefix>  snapshot/  </Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]).toEqual({
+      key: "  snapshot/a&.txt  ",
+      size: 7,
+      lastModified: " 2026-01-01 ",
+    });
+    expect(page.prefixes).toEqual(["  snapshot/  "]);
+    expect(page.nextToken).toBe("  token&  ");
   });
 
   it("returns no nextToken when not truncated", () => {
@@ -262,7 +363,7 @@ describe("parseListObjectsResponse", () => {
     ]);
   });
 
-  it("parses common prefixes whose text spans newlines", () => {
+  it("preserves common prefixes whose text spans newlines", () => {
     const xml = `<ListBucketResult>
       <IsTruncated>false</IsTruncated>
       <CommonPrefixes>
@@ -271,7 +372,7 @@ describe("parseListObjectsResponse", () => {
       </CommonPrefixes>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
-    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-00-00Z/"]);
+    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-\n00-00Z/"]);
   });
 });
 
@@ -325,6 +426,158 @@ describe("createB2Client", () => {
           "user-agent": USER_AGENT,
         }),
       }),
+    );
+  });
+
+  it("uses the S3-encoded object path for both fetch and signing", async () => {
+    const fixedDate = new Date("2026-02-19T12:00:00.000Z");
+    const originalDate = globalThis.Date;
+    globalThis.Date = class extends originalDate {
+      constructor() {
+        super();
+        return fixedDate;
+      }
+      static now() {
+        return fixedDate.getTime();
+      }
+    } as typeof Date;
+
+    try {
+      const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const b2 = await createB2Client(
+        "004test",
+        "K004secret",
+        "test-region",
+        "https://s3.test-region.backblazeb2.com/",
+      );
+
+      const body = Buffer.from("hi");
+      const key = "workspace/Marketing Image's (final)!*+.png";
+      await b2.putObject("bucket", key, body, "application/octet-stream");
+
+      const encodedPath =
+        "/bucket/workspace/Marketing%20Image%27s%20%28final%29%21%2A%2B.png";
+      expect(fetchMock).toHaveBeenCalledWith(
+        `https://s3.test-region.backblazeb2.com${encodedPath}`,
+        expect.objectContaining({ method: "PUT" }),
+      );
+
+      const init = fetchMock.mock.calls[0]![1]!;
+      const headers = init.headers as Record<string, string>;
+      const signingHeaders = {
+        host: "s3.test-region.backblazeb2.com",
+        "content-type": "application/octet-stream",
+        "user-agent": USER_AGENT,
+      };
+      const expectedHeaders = signRequest({
+        method: "PUT",
+        path: encodedPath,
+        headers: signingHeaders,
+        body,
+        region: "test-region",
+        accessKeyId: "004test",
+        secretAccessKey: "K004secret",
+      });
+      const rawPathHeaders = signRequest({
+        method: "PUT",
+        path: `/bucket/${key}`,
+        headers: signingHeaders,
+        body,
+        region: "test-region",
+        accessKeyId: "004test",
+        secretAccessKey: "K004secret",
+      });
+
+      expect(headers.authorization).toBe(expectedHeaders.authorization);
+      expect(headers.authorization).not.toBe(rawPathHeaders.authorization);
+    } finally {
+      globalThis.Date = originalDate;
+    }
+  });
+
+  it.each(["snapshot/./poison.txt", "snapshot/../poison.txt"])(
+    "rejects dot-only object key segment %s before fetch",
+    async (key) => {
+      const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const b2 = await createB2Client(
+        "004test",
+        "K004secret",
+        "test-region",
+        "https://s3.test-region.backblazeb2.com/",
+      );
+
+      expect(hasDotOnlyPathSegment(key)).toBe(true);
+      await expect(b2.deleteObject("bucket", key)).rejects.toThrow(B2ConfigError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses decoded list result keys when deleting retained objects", async () => {
+    const key = `snapshot/a&<>"'.txt`;
+    const listXml = `<ListBucketResult>
+      <IsTruncated>false</IsTruncated>
+      <Contents>
+        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
+        <Size>2</Size>
+        <LastModified>2026-01-01</LastModified>
+      </Contents>
+    </ListBucketResult>`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(listXml, { status: 200 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    const objects = await b2.listObjects("bucket", "snapshot/");
+    await b2.deleteObject("bucket", objects[0]!.key);
+
+    expect(objects[0]?.key).toBe(key);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://s3.test-region.backblazeb2.com/bucket/snapshot/a%26%3C%3E%22%27.txt",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("uses S3 query encoding for list prefixes and continuation tokens", async () => {
+    const firstPage = `<ListBucketResult>
+      <EncodingType>url</EncodingType>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>next%21%27%28%29%2A</NextContinuationToken>
+    </ListBucketResult>`;
+    const secondPage = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(firstPage, { status: 200 }))
+      .mockResolvedValueOnce(new Response(secondPage, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const b2 = await createB2Client(
+      "004test",
+      "K004secret",
+      "test-region",
+      "https://s3.test-region.backblazeb2.com/",
+    );
+
+    await b2.listObjects("bucket", "snapshot/has !'()*");
+
+    const encodedPrefix = "snapshot%2Fhas%20%21%27%28%29%2A";
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `https://s3.test-region.backblazeb2.com/bucket?encoding-type=url&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      expect.objectContaining({ method: "GET" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://s3.test-region.backblazeb2.com/bucket?continuation-token=next%21%27%28%29%2A&encoding-type=url&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      expect.objectContaining({ method: "GET" }),
     );
   });
 
