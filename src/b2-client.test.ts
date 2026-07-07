@@ -7,6 +7,7 @@ import {
   B2ConfigError,
   B2RequestError,
   createB2Client,
+  hasDotOnlyPathSegment,
 } from "./b2-client.js";
 
 const USER_AGENT = "b2ai-openclaw-b2-sync-backup (backblaze-b2-samples)";
@@ -246,15 +247,9 @@ describe("parseListObjectsResponse", () => {
   it("decodes XML entities in keys, common prefixes, and continuation tokens", () => {
     const xml = `<ListBucketResult>
       <IsTruncated>true</IsTruncated>
-      <NextContinuationToken>
-        token&amp;
-        &lt;&gt;&quot;&apos;&#43;
-      </NextContinuationToken>
+      <NextContinuationToken>token&amp;&lt;&gt;&quot;&apos;&#43;</NextContinuationToken>
       <Contents>
-        <Key>
-          snapshot/a&amp;
-          &lt;&gt;&quot;&apos;.txt
-        </Key>
+        <Key>snapshot/a&amp;&lt;&gt;&quot;&apos;.txt</Key>
         <Size>
           100
         </Size>
@@ -270,6 +265,35 @@ describe("parseListObjectsResponse", () => {
     expect(page.entries[0]?.lastModified).toBe("2026-01-01");
     expect(page.prefixes).toEqual([`snapshot/a&<>"'/`]);
     expect(page.nextToken).toBe(`token&<>"'+`);
+  });
+
+  it("decodes URL-encoded list values without losing literal newlines", () => {
+    const xml = `<ListBucketResult>
+      <EncodingType>url</EncodingType>
+      <IsTruncated>true</IsTruncated>
+      <NextContinuationToken>next%0Atoken%21%27%28%29%2A</NextContinuationToken>
+      <Contents>
+        <Key>snapshot/a%0Ab%20%21%27%28%29%2A.txt</Key>
+        <Size>7</Size>
+        <LastModified>2026-01-01</LastModified>
+      </Contents>
+      <CommonPrefixes><Prefix>snapshot/a%0Ab%2F</Prefix></CommonPrefixes>
+    </ListBucketResult>`;
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe("snapshot/a\nb !'()*.txt");
+    expect(page.prefixes).toEqual(["snapshot/a\nb/"]);
+    expect(page.nextToken).toBe("next\ntoken!'()*");
+  });
+
+  it("preserves literal newlines in non-url XML list values", () => {
+    const xml = [
+      "<ListBucketResult>",
+      "<IsTruncated>false</IsTruncated>",
+      "<Contents><Key>snapshot/a\nb.txt</Key><Size>1</Size><LastModified>2026-01-01</LastModified></Contents>",
+      "</ListBucketResult>",
+    ].join("");
+    const page = parseListObjectsResponse(xml);
+    expect(page.entries[0]?.key).toBe("snapshot/a\nb.txt");
   });
 
   it("preserves single-line whitespace in decoded XML values", () => {
@@ -324,7 +348,7 @@ describe("parseListObjectsResponse", () => {
     ]);
   });
 
-  it("parses common prefixes whose text spans newlines", () => {
+  it("preserves common prefixes whose text spans newlines", () => {
     const xml = `<ListBucketResult>
       <IsTruncated>false</IsTruncated>
       <CommonPrefixes>
@@ -333,7 +357,7 @@ describe("parseListObjectsResponse", () => {
       </CommonPrefixes>
     </ListBucketResult>`;
     const page = parseListObjectsResponse(xml);
-    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-00-00Z/"]);
+    expect(page.prefixes).toEqual(["openclaw-backup/safety-2026-01-02T00-\n00-00Z/"]);
   });
 });
 
@@ -457,6 +481,24 @@ describe("createB2Client", () => {
     }
   });
 
+  it.each(["snapshot/./poison.txt", "snapshot/../poison.txt"])(
+    "rejects dot-only object key segment %s before fetch",
+    async (key) => {
+      const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const b2 = await createB2Client(
+        "004test",
+        "K004secret",
+        "test-region",
+        "https://s3.test-region.backblazeb2.com/",
+      );
+
+      expect(hasDotOnlyPathSegment(key)).toBe(true);
+      await expect(b2.deleteObject("bucket", key)).rejects.toThrow(B2ConfigError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses decoded list result keys when deleting retained objects", async () => {
     const key = `snapshot/a&<>"'.txt`;
     const listXml = `<ListBucketResult>
@@ -492,8 +534,9 @@ describe("createB2Client", () => {
 
   it("uses S3 query encoding for list prefixes and continuation tokens", async () => {
     const firstPage = `<ListBucketResult>
+      <EncodingType>url</EncodingType>
       <IsTruncated>true</IsTruncated>
-      <NextContinuationToken>next!&apos;()*</NextContinuationToken>
+      <NextContinuationToken>next%21%27%28%29%2A</NextContinuationToken>
     </ListBucketResult>`;
     const secondPage = `<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`;
     const fetchMock = vi
@@ -513,12 +556,12 @@ describe("createB2Client", () => {
     const encodedPrefix = "snapshot%2Fhas%20%21%27%28%29%2A";
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      `https://s3.test-region.backblazeb2.com/bucket?list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      `https://s3.test-region.backblazeb2.com/bucket?encoding-type=url&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
       expect.objectContaining({ method: "GET" }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      `https://s3.test-region.backblazeb2.com/bucket?continuation-token=next%21%27%28%29%2A&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
+      `https://s3.test-region.backblazeb2.com/bucket?continuation-token=next%21%27%28%29%2A&encoding-type=url&list-type=2&max-keys=1000&prefix=${encodedPrefix}`,
       expect.objectContaining({ method: "GET" }),
     );
   });

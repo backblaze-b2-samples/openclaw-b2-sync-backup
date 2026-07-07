@@ -105,7 +105,14 @@ function s3EncodePath(key: string): string {
     .join("/");
 }
 
+function hasDotOnlyPathSegment(key: string): boolean {
+  return key.split("/").some((segment) => segment === "." || segment === "..");
+}
+
 function buildObjectPath(bucket: string, key: string): string {
+  if (hasDotOnlyPathSegment(key)) {
+    throw new B2ConfigError("b2: object key must not contain . or .. path segments");
+  }
   return `/${bucket}/${s3EncodePath(key)}`;
 }
 
@@ -180,6 +187,7 @@ function signRequest(params: S3SignParams): Record<string, string> {
 }
 
 export {
+  hasDotOnlyPathSegment,
   signRequest as _signRequest,
   s3EncodePath as _s3EncodePath,
   parseListObjectsResponse as _parseListObjectsResponse,
@@ -259,6 +267,7 @@ export async function createB2Client(
 
       do {
         const query: Record<string, string> = {
+          "encoding-type": "url",
           "list-type": "2",
           prefix,
           "max-keys": "1000",
@@ -296,6 +305,7 @@ export async function createB2Client(
 
       do {
         const query: Record<string, string> = {
+          "encoding-type": "url",
           "list-type": "2",
           prefix,
           delimiter: "/",
@@ -664,12 +674,14 @@ type ListObjectsPage = {
 };
 
 function parseListObjectsResponse(xml: string): ListObjectsPage {
+  const listValuesAreUrlEncoded =
+    decodeXmlEntities(readXmlTagText(xml, "EncodingType") ?? "") === "url";
   const entries: B2ObjectEntry[] = [];
   const contentRegex = /<Contents>([\s\S]*?)<\/Contents>/g;
   let match: RegExpExecArray | null;
   while ((match = contentRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const key = decodeXmlText(readXmlTagText(block, "Key") ?? "");
+    const key = decodeListedXmlText(readXmlTagText(block, "Key") ?? "", listValuesAreUrlEncoded);
     const size = Number(normalizeXmlTextIfMultiline(readXmlTagText(block, "Size") ?? "0"));
     const lastModified = normalizeXmlTextIfMultiline(readXmlTagText(block, "LastModified") ?? "");
     entries.push({ key, size, lastModified });
@@ -679,7 +691,10 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
   const commonPrefixRegex = /<CommonPrefixes>([\s\S]*?)<\/CommonPrefixes>/g;
   while ((match = commonPrefixRegex.exec(xml)) !== null) {
     const block = match[1]!;
-    const prefix = decodeXmlText(readXmlTagText(block, "Prefix") ?? "");
+    const prefix = decodeListedXmlText(
+      readXmlTagText(block, "Prefix") ?? "",
+      listValuesAreUrlEncoded,
+    );
     if (prefix) {
       prefixes.push(prefix);
     }
@@ -687,7 +702,10 @@ function parseListObjectsResponse(xml: string): ListObjectsPage {
 
   const isTruncated = /<IsTruncated>true<\/IsTruncated>/.test(xml);
   const nextToken = isTruncated
-    ? decodeOptionalXmlText(readXmlTagText(xml, "NextContinuationToken"))
+    ? decodeOptionalListedXmlText(
+        readXmlTagText(xml, "NextContinuationToken"),
+        listValuesAreUrlEncoded,
+      )
     : undefined;
 
   return { entries, prefixes, nextToken };
@@ -697,12 +715,24 @@ function readXmlTagText(xml: string, tagName: string): string | undefined {
   return xml.match(new RegExp(`<${tagName}>([\\s\\S]*?)<\\/${tagName}>`))?.[1];
 }
 
-function decodeOptionalXmlText(text: string | undefined): string | undefined {
-  return text === undefined ? undefined : decodeXmlText(text);
+function decodeOptionalListedXmlText(
+  text: string | undefined,
+  urlEncoded: boolean,
+): string | undefined {
+  return text === undefined ? undefined : decodeListedXmlText(text, urlEncoded);
 }
 
-function decodeXmlText(text: string): string {
-  return decodeXmlEntities(normalizeXmlTextIfMultiline(text));
+function decodeListedXmlText(text: string, urlEncoded: boolean): string {
+  const decodedXmlText = decodeXmlEntities(text);
+  return urlEncoded ? decodeUrlEncodedListText(decodedXmlText) : decodedXmlText;
+}
+
+function decodeUrlEncodedListText(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
 }
 
 const XML_ENTITIES: Record<string, string> = {

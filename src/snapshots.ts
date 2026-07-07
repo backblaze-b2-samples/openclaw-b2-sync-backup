@@ -1,4 +1,9 @@
-import { B2RequestError, type B2Client, type B2ClientWithPrefixes } from "./b2-client.js";
+import {
+  B2RequestError,
+  hasDotOnlyPathSegment,
+  type B2Client,
+  type B2ClientWithPrefixes,
+} from "./b2-client.js";
 import { SAFETY_PREFIX } from "./types.js";
 
 function supportsPrefixListing(b2: B2Client): b2 is B2ClientWithPrefixes {
@@ -152,6 +157,8 @@ export async function pruneSafetySnapshots(
 }
 
 async function deleteObjectIfPresent(b2: B2Client, bucket: string, key: string): Promise<void> {
+  if (hasDotOnlyPathSegment(key)) return;
+
   try {
     await b2.deleteObject(bucket, key);
   } catch (err) {

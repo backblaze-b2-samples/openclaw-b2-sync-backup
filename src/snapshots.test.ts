@@ -289,6 +289,37 @@ describe("snapshots", () => {
       expect(b2.deleteObject).toHaveBeenCalledTimes(1);
     });
 
+    it("quarantines dot-segment object keys during pruning", async () => {
+      const dotKey = `${prefix}/2026-01-01T00-00-00Z/./poison.txt`;
+      const dotDotKey = `${prefix}/2026-01-01T00-00-00Z/../poison.txt`;
+      const safeKey = `${prefix}/2026-01-01T00-00-00Z/file.txt`;
+      const b2 = createMockB2([
+        { key: dotKey, size: 10, lastModified: "" },
+        { key: dotDotKey, size: 10, lastModified: "" },
+        { key: safeKey, size: 10, lastModified: "" },
+        { key: `${prefix}/2026-01-02T00-00-00Z/file.txt`, size: 10, lastModified: "" },
+      ]);
+      b2.deleteObject.mockImplementation(async (_bucket: string, key: string) => {
+        if (key === dotKey || key === dotDotKey) {
+          throw new B2RequestError(
+            "deleteObject",
+            403,
+            "<Error><Code>AccessDenied</Code><Message>Signature validation failed</Message></Error>",
+            "AccessDenied",
+          );
+        }
+        b2._deleted.push(key);
+      });
+
+      const pruned = await pruneSnapshots(b2, bucket, prefix, 1);
+
+      expect(pruned).toEqual(["2026-01-01T00-00-00Z"]);
+      expect(b2.deleteObject).toHaveBeenCalledTimes(1);
+      expect(b2.deleteObject).toHaveBeenCalledWith(bucket, safeKey);
+      expect(b2.deleteObject).not.toHaveBeenCalledWith(bucket, dotKey);
+      expect(b2.deleteObject).not.toHaveBeenCalledWith(bucket, dotDotKey);
+    });
+
     it("does not suppress generic 404 delete failures", async () => {
       const b2 = createMockB2([
         { key: `${prefix}/2026-01-01T00-00-00Z/file.txt`, size: 10, lastModified: "" },
