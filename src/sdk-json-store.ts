@@ -10,10 +10,7 @@ type JsonStoreHelpers = {
   writeJsonFileAtomically: WriteJsonFileAtomically;
 };
 
-type ModuleImporter = (specifier: string) => Promise<unknown>;
-
 let helperPromise: Promise<JsonStoreHelpers> | null = null;
-let moduleImporter: ModuleImporter = (specifier) => import(specifier);
 
 export async function readJsonFileWithFallback<T>(
   filePath: string,
@@ -41,7 +38,7 @@ async function resolveJsonStoreHelpers(): Promise<JsonStoreHelpers> {
 
   for (const specifier of ["openclaw/plugin-sdk/json-store", "openclaw/plugin-sdk"]) {
     try {
-      const sdkModule = await moduleImporter(specifier);
+      const sdkModule = await import(specifier);
       if (isJsonStoreHelpers(sdkModule)) return sdkModule;
       errors.push(new Error(`${specifier} does not export JSON-store helpers`));
     } catch (err) {
@@ -63,14 +60,4 @@ function isJsonStoreHelpers(value: unknown): value is JsonStoreHelpers {
     typeof candidate.readJsonFileWithFallback === "function" &&
     typeof candidate.writeJsonFileAtomically === "function"
   );
-}
-
-export function _setModuleImporterForTests(importer: ModuleImporter): void {
-  helperPromise = null;
-  moduleImporter = importer;
-}
-
-export function _resetModuleImporterForTests(): void {
-  helperPromise = null;
-  moduleImporter = (specifier) => import(specifier);
 }
