@@ -31,10 +31,10 @@
     "json5": "^2.2.3"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.0.0"
+    "openclaw": ">=2026.4.0"
   },
   "devDependencies": {
-    "openclaw": ">=2026.0.0",
+    "openclaw": ">=2026.4.0",
     "tsdown": "^0.20.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0"
