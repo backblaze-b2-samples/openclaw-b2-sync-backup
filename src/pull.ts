@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { writeJsonFileAtomically } from "openclaw/plugin-sdk";
+import { writeJsonFileAtomically } from "./sdk-json-store.js";
 import type { B2Client } from "./b2-client.js";
 import { decrypt, isEncrypted } from "./encryption.js";
 import { deserializeManifest } from "./manifest.js";
@@ -71,9 +71,14 @@ export async function pullSnapshot(
 
   let restored = 0;
   let skipped = 0;
+  const stateRoot = path.resolve(stateDir);
 
   for (const [relativePath, entry] of Object.entries(manifest.files)) {
-    const destPath = path.join(stateDir, relativePath);
+    const destPath = resolveRestorePath(stateRoot, relativePath);
+    if (!destPath) {
+      logger.warn(`b2-backup: skipped unsafe manifest path: ${JSON.stringify(relativePath)}`);
+      continue;
+    }
 
     // Check if local file already matches
     try {
@@ -114,4 +119,27 @@ export async function pullSnapshot(
   await writeJsonFileAtomically(manifestCachePath, manifest);
 
   logger.info(`b2-backup: pull complete (${restored} restored, ${skipped} unchanged)`);
+}
+
+function resolveRestorePath(stateRoot: string, relativePath: string): string | null {
+  if (
+    path.isAbsolute(relativePath) ||
+    path.win32.isAbsolute(relativePath) ||
+    /^[a-zA-Z]:/.test(relativePath)
+  ) {
+    return null;
+  }
+
+  const destPath = path.resolve(stateRoot, relativePath);
+  const relativeToState = path.relative(stateRoot, destPath);
+  if (
+    relativeToState === "" ||
+    relativeToState === ".." ||
+    relativeToState.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativeToState)
+  ) {
+    return null;
+  }
+
+  return destPath;
 }
